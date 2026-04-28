@@ -2,6 +2,12 @@ const net = require("node:net");
 const tls = require("node:tls");
 
 const DEFAULT_TIMEOUT_MS = 12000;
+const CLIENT_IDENTITY = {
+  name: "Schedule Assistant",
+  version: "0.1.0",
+  vendor: "OpenAI Codex Prototype",
+  "support-email": "support@schedule-assistant.local",
+};
 
 function normalizeMailboxConfig(input = {}) {
   return {
@@ -142,6 +148,19 @@ class SimpleImapSession {
     await this.sendCommand(`SELECT ${quoteImap(folder)}`);
   }
 
+  async identifyClient(identity = CLIENT_IDENTITY) {
+    const pairs = Object.entries(identity)
+      .filter(([, value]) => value)
+      .map(([key, value]) => `${quoteImap(key)} ${quoteImap(value)}`)
+      .join(" ");
+
+    if (!pairs) {
+      return;
+    }
+
+    await this.sendCommand(`ID (${pairs})`);
+  }
+
   async searchAll() {
     const response = await this.sendCommand("SEARCH ALL");
     const match = response.match(/\* SEARCH([^\r\n]*)/i);
@@ -264,6 +283,9 @@ async function testMailboxConnection(input) {
     await session.login(config.username, config.password);
     result.stage = "authenticated";
 
+    await session.identifyClient();
+    result.stage = "identified";
+
     await session.selectMailbox(config.folder);
     result.stage = "mailbox_selected";
     result.folder = config.folder;
@@ -283,6 +305,7 @@ async function listTaggedMails(input, limit = 20) {
 
   try {
     await session.login(config.username, config.password);
+    await session.identifyClient();
     await session.selectMailbox(config.folder);
 
     const allSequences = await session.searchAll();

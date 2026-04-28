@@ -1100,6 +1100,7 @@ function buildMailboxConnectionMessage(response, form) {
   const stageLabels = {
     connected: "已连通收件服务器",
     authenticated: "已完成邮箱认证",
+    identified: "已完成客户端身份声明",
     mailbox_selected: `已可读取 ${form.folder} 文件夹`,
   };
   const stage = response.stage ? stageLabels[response.stage] || response.stage : "已完成连接测试";
