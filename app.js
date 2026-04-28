@@ -15,6 +15,7 @@ const ui = {
   draftConfidence: document.querySelector("#draftConfidence"),
   assistantBrief: document.querySelector("#assistantBrief"),
   mailImportStatus: document.querySelector("#mailImportStatus"),
+  mailboxSettingsPanel: document.querySelector("#mailboxSettingsPanel"),
   mailFileInput: document.querySelector("#mailFileInput"),
   agendaList: document.querySelector("#agendaList"),
   reminderList: document.querySelector("#reminderList"),
@@ -98,6 +99,22 @@ function bindEvents() {
 
     if (action === "mail-upload-ics") {
       ui.mailFileInput.click();
+    }
+
+    if (action === "mail-settings") {
+      openMailboxSettings();
+    }
+
+    if (action === "mailbox-test") {
+      testMailboxSettings();
+    }
+
+    if (action === "mailbox-save") {
+      saveMailboxSettings();
+    }
+
+    if (action === "mailbox-check-tagged") {
+      checkTaggedMailboxMails();
     }
 
     if (action === "confirm-mail-import") {
@@ -229,6 +246,7 @@ function render() {
   renderDraft();
   renderAssistantBrief();
   renderMailImport();
+  renderMailboxSettings();
   renderAgenda();
   renderReminders();
   renderTravel();
@@ -477,6 +495,66 @@ function renderMailImport() {
       </div>
     `;
   }
+}
+
+function renderMailboxSettings() {
+  const mailbox = state.mailboxSettings;
+
+  if (!mailbox || mailbox.mode !== "editing") {
+    ui.mailboxSettingsPanel.className = "draft-empty";
+    ui.mailboxSettingsPanel.innerHTML =
+      "助理只会检查你主动标记为 <code>[助理]</code> 的会议邮件，不会读取其他普通邮件。";
+    return;
+  }
+
+  ui.mailboxSettingsPanel.className = "mailbox-settings";
+  ui.mailboxSettingsPanel.innerHTML = `
+    <div class="mailbox-note">
+      请告诉助理应该检查哪个邮箱、哪个文件夹，以及用什么主题标识识别“需要交给助理处理”的会议邮件。
+    </div>
+    <div class="mailbox-settings-form">
+      <div class="mailbox-grid">
+        <div class="mailbox-field">
+          <label for="mailboxEmail">邮箱地址</label>
+          <input id="mailboxEmail" value="${escapeHtml(mailbox.email || "")}" placeholder="name@company.com" />
+        </div>
+        <div class="mailbox-field">
+          <label for="mailboxHost">收件服务器</label>
+          <input id="mailboxHost" value="${escapeHtml(mailbox.imapHost || "outlook.office365.com")}" placeholder="outlook.office365.com" />
+        </div>
+        <div class="mailbox-field">
+          <label for="mailboxPort">端口</label>
+          <input id="mailboxPort" value="${escapeHtml(String(mailbox.imapPort || 993))}" placeholder="993" />
+        </div>
+        <div class="mailbox-field">
+          <label for="mailboxFolder">检查文件夹</label>
+          <input id="mailboxFolder" value="${escapeHtml(mailbox.folder || "INBOX")}" placeholder="INBOX" />
+        </div>
+        <div class="mailbox-field">
+          <label for="mailboxUsername">登录账号</label>
+          <input id="mailboxUsername" value="${escapeHtml(mailbox.username || mailbox.email || "")}" placeholder="name@company.com" />
+        </div>
+        <div class="mailbox-field">
+          <label for="mailboxTag">助理邮件标识</label>
+          <input id="mailboxTag" value="${escapeHtml(mailbox.subjectTag || "[助理]")}" placeholder="[助理]" />
+        </div>
+      </div>
+      <div class="mailbox-field">
+        <label for="mailboxPassword">邮箱密码 / 应用专用密码</label>
+        <input id="mailboxPassword" type="password" value="${escapeHtml(mailbox.password || "")}" placeholder="请输入密码或专用密码" />
+      </div>
+      <div class="capture-actions">
+        <button class="primary-button" type="button" data-action="mailbox-test">测试邮箱连接</button>
+        <button class="secondary-button" type="button" data-action="mailbox-check-tagged">检查最近 [助理] 邮件</button>
+        <button class="ghost-button" type="button" data-action="mailbox-save">保存设置</button>
+      </div>
+      ${
+        mailbox.resultMessage
+          ? `<div class="mailbox-note">${escapeHtml(mailbox.resultMessage)}</div>`
+          : ""
+      }
+    </div>
+  `;
 }
 
 function renderAgenda() {
@@ -765,6 +843,22 @@ function startForwardedMailFlow() {
   ui.voiceStatus.textContent = "已记录：你刚刚转发了一封会议邀请";
 }
 
+function openMailboxSettings() {
+  state.mailboxSettings = {
+    mode: "editing",
+    email: state.mailboxSettings?.email || "",
+    imapHost: state.mailboxSettings?.imapHost || "outlook.office365.com",
+    imapPort: state.mailboxSettings?.imapPort || 993,
+    folder: state.mailboxSettings?.folder || "INBOX",
+    username: state.mailboxSettings?.username || "",
+    password: state.mailboxSettings?.password || "",
+    subjectTag: state.mailboxSettings?.subjectTag || "[助理]",
+    resultMessage: "",
+  };
+  saveState();
+  renderMailboxSettings();
+}
+
 function simulateForwardedMailRecognition() {
   const startAt = getNextBusinessSlot(1, 16, 0);
   const endAt = new Date(startAt.getTime() + 60 * 60 * 1000);
@@ -839,6 +933,50 @@ function handleMailFileChange(event) {
     ui.mailFileInput.value = "";
   };
   reader.readAsText(file);
+}
+
+function readMailboxForm() {
+  return {
+    mode: "editing",
+    email: document.querySelector("#mailboxEmail")?.value.trim() || "",
+    imapHost: document.querySelector("#mailboxHost")?.value.trim() || "outlook.office365.com",
+    imapPort: Number(document.querySelector("#mailboxPort")?.value.trim() || 993),
+    folder: document.querySelector("#mailboxFolder")?.value.trim() || "INBOX",
+    username: document.querySelector("#mailboxUsername")?.value.trim() || "",
+    password: document.querySelector("#mailboxPassword")?.value || "",
+    subjectTag: document.querySelector("#mailboxTag")?.value.trim() || "[助理]",
+    resultMessage: "",
+  };
+}
+
+function testMailboxSettings() {
+  const form = readMailboxForm();
+  form.resultMessage =
+    form.email && form.username && form.password
+      ? `已完成演示测试：将尝试连接 ${form.imapHost}:${form.imapPort}，并只检查主题含 ${form.subjectTag} 的邮件。`
+      : "请先补全邮箱地址、登录账号和密码，再测试连接。";
+  state.mailboxSettings = form;
+  saveState();
+  renderMailboxSettings();
+  ui.voiceStatus.textContent = "已运行邮箱连接演示测试";
+}
+
+function saveMailboxSettings() {
+  const form = readMailboxForm();
+  form.resultMessage = "助理收件设置已保存。后续真实接入时，系统将只检查带指定标识的邮件。";
+  state.mailboxSettings = form;
+  saveState();
+  renderMailboxSettings();
+  ui.voiceStatus.textContent = "助理收件设置已保存";
+}
+
+function checkTaggedMailboxMails() {
+  const form = readMailboxForm();
+  form.resultMessage = `已演示检查 ${form.folder} 文件夹中主题包含 ${form.subjectTag} 的最近邮件。正式接入后，这里会返回真实待处理邮件数量。`;
+  state.mailboxSettings = form;
+  saveState();
+  renderMailboxSettings();
+  ui.voiceStatus.textContent = "已演示检查最近 [助理] 邮件";
 }
 
 function buildMailImportFromText(rawText) {
@@ -1530,6 +1668,7 @@ function loadState() {
   return {
     draft: null,
     mailImport: null,
+    mailboxSettings: null,
     events: [
       {
         id: crypto.randomUUID(),

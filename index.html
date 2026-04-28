@@ -126,6 +126,18 @@
           </div>
         </section>
 
+        <section class="card mailbox-card" id="mailboxSettings">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Mailbox Setup</p>
+              <h2>助理收件设置</h2>
+            </div>
+          </div>
+          <div id="mailboxSettingsPanel" class="draft-empty">
+            助理只会检查你主动标记为 `[助理]` 的会议邮件，不会读取其他普通邮件。
+          </div>
+        </section>
+
         <section class="card agenda-card" id="agenda">
           <div class="section-heading">
             <div>
@@ -177,6 +189,9 @@
                 </button>
                 <button class="small-button" type="button" data-action="mail-upload-ics">
                   上传 .ics
+                </button>
+                <button class="small-button" type="button" data-action="mail-settings">
+                  助理收件设置
                 </button>
               </div>
             </article>

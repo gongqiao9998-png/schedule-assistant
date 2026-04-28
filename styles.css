@@ -344,6 +344,56 @@ a:hover {
   gap: 14px;
 }
 
+.mailbox-settings {
+  display: grid;
+  gap: 14px;
+}
+
+.mailbox-settings-form {
+  display: grid;
+  gap: 12px;
+}
+
+.mailbox-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mailbox-field {
+  display: grid;
+  gap: 8px;
+}
+
+.mailbox-field label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.mailbox-field input {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 0 14px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--ink);
+  outline: none;
+}
+
+.mailbox-field input:focus {
+  border-color: rgba(18, 60, 58, 0.42);
+  box-shadow: 0 0 0 4px rgba(18, 60, 58, 0.08);
+}
+
+.mailbox-note {
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  background: rgba(18, 60, 58, 0.06);
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .mail-decision {
   padding: 18px;
   border-radius: var(--radius-lg);
@@ -542,7 +592,8 @@ a:hover {
   .hero__summary,
   .draft-grid,
   .sync-grid,
-  .mail-detail-grid {
+  .mail-detail-grid,
+  .mailbox-grid {
     display: grid;
   }
 
