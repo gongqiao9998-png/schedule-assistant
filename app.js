@@ -858,6 +858,8 @@ function openMailboxSettings() {
   };
   saveState();
   renderMailboxSettings();
+  scrollToMailboxSettings();
+  ui.voiceStatus.textContent = "已展开助理收件设置";
 }
 
 async function simulateForwardedMailRecognition() {
@@ -1003,7 +1005,10 @@ async function testMailboxSettings() {
     ui.voiceStatus.textContent = "邮箱连接测试完成";
   } catch (error) {
     console.warn("mailbox test fallback:", error);
-    form.resultMessage = `未连通后端测试接口，已回退演示模式：将尝试连接 ${form.imapHost}:${form.imapPort}，并只检查主题含 ${form.subjectTag} 的邮件。`;
+    form.resultMessage = buildMailboxErrorMessage(
+      error,
+      `未连通后端测试接口，已回退演示模式：将尝试连接 ${form.imapHost}:${form.imapPort}，并只检查主题含 ${form.subjectTag} 的邮件。`
+    );
     state.mailboxSettings = form;
     saveState();
     renderMailboxSettings();
@@ -1055,7 +1060,10 @@ async function checkTaggedMailboxMails() {
     ui.voiceStatus.textContent = "最近 [助理] 邮件检查完成";
   } catch (error) {
     console.warn("tagged mail fallback:", error);
-    form.resultMessage = `未连通真实检查接口，已回退演示模式：将检查 ${form.folder} 文件夹中主题包含 ${form.subjectTag} 的最近邮件。`;
+    form.resultMessage = buildMailboxErrorMessage(
+      error,
+      `未连通真实检查接口，已回退演示模式：将检查 ${form.folder} 文件夹中主题包含 ${form.subjectTag} 的最近邮件。`
+    );
     state.mailboxSettings = form;
     saveState();
     renderMailboxSettings();
@@ -1130,6 +1138,27 @@ function buildMailImportFromMailboxItem(item) {
     todoTitle: `准备${cleanedSubject || "邮件会议"}会前资料`,
     source: "mailbox-api",
   };
+}
+
+function buildMailboxErrorMessage(error, fallbackMessage) {
+  const message = error?.message?.trim();
+  if (!message) {
+    return fallbackMessage;
+  }
+
+  return `真实检查失败：${message}`;
+}
+
+function scrollToMailboxSettings() {
+  const section = document.querySelector("#mailboxSettings");
+  if (!section) {
+    return;
+  }
+
+  section.scrollIntoView({
+    behavior: "smooth",
+    block: "start",
+  });
 }
 
 function buildMailImportFromText(rawText) {
