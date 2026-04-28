@@ -1,4 +1,5 @@
 const STORAGE_KEY = "assistant-schedule-mvp";
+const MAILBOX_API_TIMEOUT_MS = 12000;
 
 const state = loadState();
 const ui = {
@@ -62,7 +63,7 @@ function bindEvents() {
   ui.notifyButton.addEventListener("click", requestNotificationPermission);
   ui.mailFileInput.addEventListener("change", handleMailFileChange);
 
-  document.addEventListener("click", (event) => {
+  document.addEventListener("click", async (event) => {
     const actionButton = event.target.closest("[data-action]");
     if (!actionButton) {
       return;
@@ -86,7 +87,7 @@ function bindEvents() {
     }
 
     if (action === "mail-check") {
-      simulateForwardedMailRecognition();
+      await simulateForwardedMailRecognition();
     }
 
     if (action === "mail-paste") {
@@ -106,15 +107,15 @@ function bindEvents() {
     }
 
     if (action === "mailbox-test") {
-      testMailboxSettings();
+      await testMailboxSettings();
     }
 
     if (action === "mailbox-save") {
-      saveMailboxSettings();
+      await saveMailboxSettings();
     }
 
     if (action === "mailbox-check-tagged") {
-      checkTaggedMailboxMails();
+      await checkTaggedMailboxMails();
     }
 
     if (action === "confirm-mail-import") {
@@ -859,7 +860,38 @@ function openMailboxSettings() {
   renderMailboxSettings();
 }
 
-function simulateForwardedMailRecognition() {
+async function simulateForwardedMailRecognition() {
+  if (state.mailboxSettings?.email && state.mailboxSettings?.username && state.mailboxSettings?.password) {
+    try {
+      ui.voiceStatus.textContent = "正在检查最近一封 [助理] 邮件";
+      const response = await callMailboxApi("/api/mail/check-latest", {
+        ...state.mailboxSettings,
+        limit: 20,
+      });
+
+      if (response.found && response.item) {
+        state.mailImport = {
+          mode: "parsed",
+          item: buildMailImportFromMailboxItem(response.item),
+        };
+        saveState();
+        renderMailImport();
+        ui.voiceStatus.textContent = "已从邮箱找到最近一封 [助理] 邮件";
+        return;
+      }
+
+      const form = {
+        ...state.mailboxSettings,
+        resultMessage: `未找到新的 ${state.mailboxSettings.subjectTag || "[助理]"} 邮件，已回退为演示识别。`,
+      };
+      state.mailboxSettings = form;
+      saveState();
+      renderMailboxSettings();
+    } catch (error) {
+      console.warn("mail check fallback:", error);
+    }
+  }
+
   const startAt = getNextBusinessSlot(1, 16, 0);
   const endAt = new Date(startAt.getTime() + 60 * 60 * 1000);
 
@@ -949,34 +981,155 @@ function readMailboxForm() {
   };
 }
 
-function testMailboxSettings() {
+async function testMailboxSettings() {
   const form = readMailboxForm();
-  form.resultMessage =
-    form.email && form.username && form.password
-      ? `已完成演示测试：将尝试连接 ${form.imapHost}:${form.imapPort}，并只检查主题含 ${form.subjectTag} 的邮件。`
-      : "请先补全邮箱地址、登录账号和密码，再测试连接。";
-  state.mailboxSettings = form;
-  saveState();
-  renderMailboxSettings();
-  ui.voiceStatus.textContent = "已运行邮箱连接演示测试";
+
+  if (!form.email || !form.username || !form.password) {
+    form.resultMessage = "请先补全邮箱地址、登录账号和密码，再测试连接。";
+    state.mailboxSettings = form;
+    saveState();
+    renderMailboxSettings();
+    ui.voiceStatus.textContent = "请先补全邮箱连接信息";
+    return;
+  }
+
+  try {
+    ui.voiceStatus.textContent = "正在测试邮箱连接";
+    const response = await callMailboxApi("/api/mailbox/test-connection", form);
+    form.resultMessage = buildMailboxConnectionMessage(response, form);
+    state.mailboxSettings = form;
+    saveState();
+    renderMailboxSettings();
+    ui.voiceStatus.textContent = "邮箱连接测试完成";
+  } catch (error) {
+    console.warn("mailbox test fallback:", error);
+    form.resultMessage = `未连通后端测试接口，已回退演示模式：将尝试连接 ${form.imapHost}:${form.imapPort}，并只检查主题含 ${form.subjectTag} 的邮件。`;
+    state.mailboxSettings = form;
+    saveState();
+    renderMailboxSettings();
+    ui.voiceStatus.textContent = "已运行邮箱连接演示测试";
+  }
 }
 
-function saveMailboxSettings() {
+async function saveMailboxSettings() {
   const form = readMailboxForm();
-  form.resultMessage = "助理收件设置已保存。后续真实接入时，系统将只检查带指定标识的邮件。";
+
+  try {
+    const response = await callMailboxApi("/api/mailbox/settings", form);
+    form.resultMessage =
+      response.message ||
+      "助理收件设置已保存。后续真实接入时，系统将只检查带指定标识的邮件。";
+  } catch (error) {
+    console.warn("mailbox save fallback:", error);
+    form.resultMessage = "助理收件设置已保存到当前设备。后续真实接入时，系统将只检查带指定标识的邮件。";
+  }
+
   state.mailboxSettings = form;
   saveState();
   renderMailboxSettings();
   ui.voiceStatus.textContent = "助理收件设置已保存";
 }
 
-function checkTaggedMailboxMails() {
+async function checkTaggedMailboxMails() {
   const form = readMailboxForm();
-  form.resultMessage = `已演示检查 ${form.folder} 文件夹中主题包含 ${form.subjectTag} 的最近邮件。正式接入后，这里会返回真实待处理邮件数量。`;
-  state.mailboxSettings = form;
-  saveState();
-  renderMailboxSettings();
-  ui.voiceStatus.textContent = "已演示检查最近 [助理] 邮件";
+
+  if (!form.email || !form.username || !form.password) {
+    form.resultMessage = "请先保存邮箱账号与密码，再检查最近 [助理] 邮件。";
+    state.mailboxSettings = form;
+    saveState();
+    renderMailboxSettings();
+    ui.voiceStatus.textContent = "请先补全助理收件设置";
+    return;
+  }
+
+  try {
+    ui.voiceStatus.textContent = `正在检查 ${form.subjectTag} 邮件`;
+    const response = await callMailboxApi("/api/mailbox/check-tagged-mails", {
+      ...form,
+      limit: 20,
+    });
+    form.resultMessage = buildTaggedMailResultMessage(response, form);
+    state.mailboxSettings = form;
+    saveState();
+    renderMailboxSettings();
+    ui.voiceStatus.textContent = "最近 [助理] 邮件检查完成";
+  } catch (error) {
+    console.warn("tagged mail fallback:", error);
+    form.resultMessage = `未连通真实检查接口，已回退演示模式：将检查 ${form.folder} 文件夹中主题包含 ${form.subjectTag} 的最近邮件。`;
+    state.mailboxSettings = form;
+    saveState();
+    renderMailboxSettings();
+    ui.voiceStatus.textContent = "已演示检查最近 [助理] 邮件";
+  }
+}
+
+async function callMailboxApi(path, payload) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), MAILBOX_API_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.success === false) {
+      throw new Error(data?.error?.message || `Request failed with status ${response.status}`);
+    }
+
+    return data;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function buildMailboxConnectionMessage(response, form) {
+  const stageLabels = {
+    connected: "已连通收件服务器",
+    authenticated: "已完成邮箱认证",
+    mailbox_selected: `已可读取 ${form.folder} 文件夹`,
+  };
+  const stage = response.stage ? stageLabels[response.stage] || response.stage : "已完成连接测试";
+  const banner = response.serverBanner ? `服务器响应：${response.serverBanner}` : "";
+  return `${stage}。${banner}`.trim();
+}
+
+function buildTaggedMailResultMessage(response, form) {
+  if (!response.count) {
+    return `未找到新的 ${form.subjectTag} 邮件。助理会继续只检查 ${form.folder} 中被你主动标记的会议邮件。`;
+  }
+
+  const latest = response.items?.[0];
+  const latestSummary = latest?.subject
+    ? ` 最近一封是《${latest.subject.replace(form.subjectTag, "").trim()}》。`
+    : "";
+  return `已找到 ${response.count} 封 ${form.subjectTag} 邮件。${latestSummary}`.trim();
+}
+
+function buildMailImportFromMailboxItem(item) {
+  const startAt = getNextBusinessSlot(1, 16, 0);
+  const endAt = new Date(startAt.getTime() + 60 * 60 * 1000);
+  const cleanedSubject = (item.subject || "最近转发邮件").replace(item.subjectTag || "[助理]", "").trim();
+
+  return {
+    title: cleanedSubject || "最近转发邮件",
+    decision: "create",
+    decisionLabel: "助理判断：已发现待解析邮件",
+    summary: "后端已找到一封带指定标识的邮件。下一步可继续接入正文与 .ics 深度解析，把它自动判断为新增、改期或取消。",
+    startAt: startAt.toISOString(),
+    endAt: endAt.toISOString(),
+    location: "待从邮件正文 / .ics 解析",
+    organizer: item.from || "当前邮箱",
+    meetingLink: "",
+    reminderTitle: `会前确认${cleanedSubject || "邮件会议"}资料`,
+    todoTitle: `准备${cleanedSubject || "邮件会议"}会前资料`,
+    source: "mailbox-api",
+  };
 }
 
 function buildMailImportFromText(rawText) {
