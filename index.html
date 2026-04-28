@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta
+      name="description"
+      content="面向商务人士的移动端个人助理式日程管理工具，支持语音录入、行程整理、提醒与差旅请求。"
+    />
+    <meta name="theme-color" content="#123c3a" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="行程助理" />
+    <title>行程助理</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icon.svg" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div class="hero__top">
+          <div>
+            <p class="eyebrow">Personal Assistant</p>
+            <h1>行程助理</h1>
+            <p class="hero__subtitle">
+              把邮件邀约、手机提醒、见面待办和差旅安排收拢成一个移动端工作台。
+            </p>
+          </div>
+          <div class="hero__actions">
+            <button class="outline-button" id="installButton" type="button">
+              安装到手机
+            </button>
+            <button class="outline-button" id="notifyButton" type="button">
+              开启提醒
+            </button>
+          </div>
+        </div>
+
+        <section class="hero__summary" id="summaryCards"></section>
+      </header>
+
+      <main class="layout">
+        <section class="card capture-card" id="capture">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Voice Inbox</p>
+              <h2>一句话录入今天的安排</h2>
+            </div>
+            <span class="status-pill" id="voiceStatus">可输入文本或语音</span>
+          </div>
+
+          <div class="capture-area">
+            <textarea
+              id="captureInput"
+              rows="5"
+              placeholder="例如：明天下午三点和张总在陆家嘴见面，提醒我提前两小时出发，并订周五晚上去杭州的高铁。"
+            ></textarea>
+            <div class="capture-actions">
+              <button class="primary-button" id="listenButton" type="button">
+                语音录入
+              </button>
+              <button class="secondary-button" id="parseButton" type="button">
+                生成助理草稿
+              </button>
+              <button class="ghost-button" id="clearButton" type="button">
+                清空
+              </button>
+            </div>
+          </div>
+
+          <div class="prompt-chips" id="promptChips">
+            <button type="button" class="chip">
+              今天下午4点和李总电话沟通季度合作，提前30分钟提醒我
+            </button>
+            <button type="button" class="chip">
+              下周二上午10点去虹桥机场飞深圳，预定接机和酒店
+            </button>
+            <button type="button" class="chip">
+              周五晚上约客户在静安寺晚餐，记得准备合同
+            </button>
+          </div>
+        </section>
+
+        <section class="card assistant-card" id="draftSection">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Assistant Draft</p>
+              <h2>助理已整理的安排</h2>
+            </div>
+            <span class="confidence" id="draftConfidence">等待输入</span>
+          </div>
+          <div id="draftContent" class="draft-empty">
+            输入一段语音或文字后，系统会自动拆出日程、提醒、待办和差旅行程。
+          </div>
+        </section>
+
+        <section class="card agenda-card" id="agenda">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Today View</p>
+              <h2>近期行事历</h2>
+            </div>
+          </div>
+          <div id="agendaList" class="stack-list"></div>
+        </section>
+
+        <section class="card reminder-card" id="reminders">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Reminder Desk</p>
+              <h2>提醒与待办</h2>
+            </div>
+          </div>
+          <div id="reminderList" class="stack-list"></div>
+        </section>
+
+        <section class="card travel-card" id="travel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Travel Concierge</p>
+              <h2>差旅预订请求</h2>
+            </div>
+          </div>
+          <div id="travelList" class="stack-list"></div>
+        </section>
+
+        <section class="card sync-card" id="sync">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Sync Center</p>
+              <h2>外部系统接入位</h2>
+            </div>
+          </div>
+          <div class="sync-grid">
+            <article class="sync-item">
+              <span class="sync-badge sync-badge--ready">规划中</span>
+              <h3>邮件邀约</h3>
+              <p>后续可接企业邮箱，将会议邀请自动写入行事历。</p>
+            </article>
+            <article class="sync-item">
+              <span class="sync-badge sync-badge--ready">规划中</span>
+              <h3>手机日历 / 提醒事项</h3>
+              <p>后续可与系统日历和待办同步，形成统一时间轴。</p>
+            </article>
+            <article class="sync-item">
+              <span class="sync-badge sync-badge--pending">预留接口</span>
+              <h3>钉钉差旅</h3>
+              <p>当前先生成预订请求卡片，后续可接企业差旅审批与预定链路。</p>
+            </article>
+          </div>
+        </section>
+      </main>
+
+      <nav class="bottom-nav">
+        <a href="#capture">录入</a>
+        <a href="#agenda">行事历</a>
+        <a href="#reminders">提醒</a>
+        <a href="#travel">差旅</a>
+        <a href="#sync">接入</a>
+      </nav>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

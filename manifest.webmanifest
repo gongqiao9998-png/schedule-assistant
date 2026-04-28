@@ -1,0 +1,17 @@
+{
+  "name": "行程助理",
+  "short_name": "行程助理",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f4efe5",
+  "theme_color": "#123c3a",
+  "description": "面向移动端的个人助理式日程管理工具原型。",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

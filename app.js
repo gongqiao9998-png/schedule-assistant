@@ -1,0 +1,997 @@
+const STORAGE_KEY = "assistant-schedule-mvp";
+
+const state = loadState();
+const ui = {
+  summaryCards: document.querySelector("#summaryCards"),
+  captureInput: document.querySelector("#captureInput"),
+  parseButton: document.querySelector("#parseButton"),
+  clearButton: document.querySelector("#clearButton"),
+  listenButton: document.querySelector("#listenButton"),
+  installButton: document.querySelector("#installButton"),
+  notifyButton: document.querySelector("#notifyButton"),
+  voiceStatus: document.querySelector("#voiceStatus"),
+  draftContent: document.querySelector("#draftContent"),
+  draftConfidence: document.querySelector("#draftConfidence"),
+  agendaList: document.querySelector("#agendaList"),
+  reminderList: document.querySelector("#reminderList"),
+  travelList: document.querySelector("#travelList"),
+  promptChips: document.querySelector("#promptChips"),
+};
+
+const speechApi = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let reminderTimers = [];
+let installPromptEvent = null;
+
+boot();
+
+function boot() {
+  setupInstallPrompt();
+  render();
+  registerServiceWorker();
+  bindEvents();
+  scheduleReminderNotifications();
+}
+
+function bindEvents() {
+  ui.parseButton.addEventListener("click", handleParse);
+  ui.clearButton.addEventListener("click", () => {
+    ui.captureInput.value = "";
+    state.draft = null;
+    saveState();
+    renderDraft();
+  });
+
+  ui.promptChips.addEventListener("click", (event) => {
+    const button = event.target.closest(".chip");
+    if (!button) {
+      return;
+    }
+
+    ui.captureInput.value = button.textContent.trim();
+    handleParse();
+  });
+
+  ui.listenButton.addEventListener("click", toggleVoiceInput);
+  ui.installButton.addEventListener("click", handleInstallClick);
+  ui.notifyButton.addEventListener("click", requestNotificationPermission);
+
+  document.addEventListener("click", (event) => {
+    const actionButton = event.target.closest("[data-action]");
+    if (!actionButton) {
+      return;
+    }
+
+    const { action, type, id } = actionButton.dataset;
+    if (action === "save-draft") {
+      persistDraft();
+    }
+
+    if (action === "toggle" && type) {
+      toggleItemStatus(type, id);
+    }
+  });
+}
+
+function setupInstallPrompt() {
+  ui.installButton.hidden = true;
+
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    installPromptEvent = event;
+    ui.installButton.hidden = false;
+    ui.installButton.textContent = "安装到手机";
+  });
+
+  window.addEventListener("appinstalled", () => {
+    installPromptEvent = null;
+    ui.installButton.hidden = true;
+    ui.voiceStatus.textContent = "应用已安装到桌面";
+  });
+
+  if (isStandaloneMode()) {
+    ui.installButton.hidden = true;
+    return;
+  }
+
+  if (isIosDevice()) {
+    ui.installButton.hidden = false;
+    ui.installButton.textContent = "iPhone 安装说明";
+  }
+}
+
+function handleParse() {
+  const input = ui.captureInput.value.trim();
+
+  if (!input) {
+    ui.voiceStatus.textContent = "请先输入一句安排";
+    return;
+  }
+
+  state.draft = parseAssistantInput(input);
+  saveState();
+  renderDraft();
+}
+
+function persistDraft() {
+  if (!state.draft) {
+    return;
+  }
+
+  if (state.draft.calendarEvent) {
+    state.events.unshift({
+      ...state.draft.calendarEvent,
+      id: crypto.randomUUID(),
+      status: "scheduled",
+    });
+  }
+
+  state.draft.reminders.forEach((reminder) => {
+    state.reminders.unshift({
+      ...reminder,
+      id: crypto.randomUUID(),
+      status: "pending",
+      source: "assistant",
+    });
+  });
+
+  state.draft.todos.forEach((todo) => {
+    state.reminders.unshift({
+      ...todo,
+      id: crypto.randomUUID(),
+      kind: "todo",
+      status: "pending",
+      source: "assistant",
+    });
+  });
+
+  if (state.draft.travelRequest) {
+    state.travelRequests.unshift({
+      ...state.draft.travelRequest,
+      id: crypto.randomUUID(),
+      status: "待预订",
+    });
+  }
+
+  state.draft = null;
+  ui.captureInput.value = "";
+  saveState();
+  render();
+  scheduleReminderNotifications();
+  ui.voiceStatus.textContent = "已保存到工作台";
+}
+
+function toggleItemStatus(type, id) {
+  const targetList = type === "event" ? state.events : state.reminders;
+  const item = targetList.find((entry) => entry.id === id);
+
+  if (!item) {
+    return;
+  }
+
+  if (type === "event") {
+    item.status = item.status === "done" ? "scheduled" : "done";
+  } else {
+    item.status = item.status === "done" ? "pending" : "done";
+  }
+
+  saveState();
+  render();
+  scheduleReminderNotifications();
+}
+
+function render() {
+  renderSummary();
+  renderDraft();
+  renderAgenda();
+  renderReminders();
+  renderTravel();
+}
+
+function renderSummary() {
+  const today = new Date();
+  const todayStart = startOfDay(today);
+  const tomorrowStart = addDays(todayStart, 1);
+
+  const todayEvents = state.events.filter((event) => {
+    const start = new Date(event.startAt);
+    return start >= todayStart && start < tomorrowStart;
+  });
+
+  const pendingReminders = state.reminders.filter((item) => item.status !== "done");
+  const pendingTravel = state.travelRequests.filter((item) => item.status !== "已完成");
+
+  const cards = [
+    {
+      label: "今日安排",
+      value: `${todayEvents.length}`,
+      helper: todayEvents[0] ? formatDateTime(todayEvents[0].startAt) : "今天暂无会议",
+    },
+    {
+      label: "待提醒 / 待办",
+      value: `${pendingReminders.length}`,
+      helper: pendingReminders[0] ? pendingReminders[0].title : "提醒已清空",
+    },
+    {
+      label: "差旅请求",
+      value: `${pendingTravel.length}`,
+      helper: pendingTravel[0] ? pendingTravel[0].title : "目前没有待预订行程",
+    },
+  ];
+
+  ui.summaryCards.innerHTML = cards
+    .map(
+      (card) => `
+        <article class="summary-card">
+          <span>${card.label}</span>
+          <strong>${card.value}</strong>
+          <p>${escapeHtml(card.helper)}</p>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderDraft() {
+  if (!state.draft) {
+    ui.draftConfidence.textContent = "等待输入";
+    ui.draftContent.className = "draft-empty";
+    ui.draftContent.textContent =
+      "输入一段语音或文字后，系统会自动拆出日程、提醒、待办和差旅行程。";
+    return;
+  }
+
+  const { calendarEvent, reminders, todos, travelRequest, confidence, summary } = state.draft;
+  ui.draftConfidence.textContent = `识别可信度 ${Math.round(confidence * 100)}%`;
+  ui.draftContent.className = "draft-grid";
+
+  const reminderItems = reminders.length
+    ? `<ul>${reminders.map((item) => `<li>${escapeHtml(item.title)} · ${escapeHtml(formatDateTime(item.remindAt))}</li>`).join("")}</ul>`
+    : "<p>未识别到提醒，保存后可在提醒区补充。</p>";
+
+  const todoItems = todos.length
+    ? `<ul>${todos.map((item) => `<li>${escapeHtml(item.title)}</li>`).join("")}</ul>`
+    : "<p>没有额外待办。</p>";
+
+  const eventBlock = calendarEvent
+    ? `
+      <article class="draft-block">
+        <span class="type-pill">日程</span>
+        <h3>${escapeHtml(calendarEvent.title)}</h3>
+        <p>${escapeHtml(summary)}</p>
+        <ul class="meta-list">
+          <li>${escapeHtml(formatDateTime(calendarEvent.startAt))} - ${escapeHtml(formatDateTime(calendarEvent.endAt, true))}</li>
+          <li>${escapeHtml(calendarEvent.location || "地点待定")}</li>
+          <li>${escapeHtml(calendarEvent.participants || "参与人待补充")}</li>
+        </ul>
+      </article>
+    `
+    : `
+      <article class="draft-block">
+        <span class="type-pill">日程</span>
+        <h3>未识别到明确时间</h3>
+        <p>可以再补一句具体日期和时间，系统就能自动生成行事历。</p>
+      </article>
+    `;
+
+  const travelBlock = travelRequest
+    ? `
+      <article class="draft-block">
+        <span class="type-pill">差旅</span>
+        <h3>${escapeHtml(travelRequest.title)}</h3>
+        <p>${escapeHtml(travelRequest.note)}</p>
+        <ul class="meta-list">
+          <li>${escapeHtml(travelRequest.mode)}</li>
+          <li>${escapeHtml(travelRequest.route)}</li>
+          <li>${escapeHtml(formatDateTime(travelRequest.departAt))}</li>
+        </ul>
+      </article>
+    `
+    : `
+      <article class="draft-block">
+        <span class="type-pill">差旅</span>
+        <h3>没有预订需求</h3>
+        <p>如果你说了飞机、高铁、酒店、接送机等关键词，这里会自动生成预订请求。</p>
+      </article>
+    `;
+
+  ui.draftContent.innerHTML = `
+    ${eventBlock}
+    <article class="draft-block">
+      <span class="type-pill">提醒</span>
+      <h3>提醒清单</h3>
+      ${reminderItems}
+    </article>
+    <article class="draft-block">
+      <span class="type-pill">待办</span>
+      <h3>跟进事项</h3>
+      ${todoItems}
+    </article>
+    ${travelBlock}
+    <article class="draft-block">
+      <span class="type-pill">动作</span>
+      <h3>一键写入工作台</h3>
+      <p>确认无误后，系统会把识别出的安排写入你的行事历、提醒和差旅区。</p>
+      <div class="capture-actions">
+        <button class="primary-button" type="button" data-action="save-draft">保存安排</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderAgenda() {
+  if (!state.events.length) {
+    ui.agendaList.innerHTML =
+      '<div class="empty-state">还没有正式写入的行程。先在上方用一句话告诉助理你的安排。</div>';
+    return;
+  }
+
+  const sortedEvents = [...state.events].sort((a, b) => new Date(a.startAt) - new Date(b.startAt));
+
+  ui.agendaList.innerHTML = sortedEvents
+    .map(
+      (event) => `
+        <article class="list-item">
+          <div class="list-item__top">
+            <div>
+              <span class="type-pill">行程</span>
+              <h3>${escapeHtml(event.title)}</h3>
+            </div>
+            <span class="time-pill">${escapeHtml(formatDateTime(event.startAt))}</span>
+          </div>
+          <p>${escapeHtml(event.location || "地点待定")} · ${escapeHtml(event.participants || "参与人待补充")}</p>
+          <div class="list-item__footer">
+            <span>${escapeHtml(event.notes || "由助理根据输入自动整理")}</span>
+            <button class="small-button ${event.status === "done" ? "is-complete" : ""}" type="button" data-action="toggle" data-type="event" data-id="${event.id}">
+              ${event.status === "done" ? "已完成" : "标记完成"}
+            </button>
+          </div>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderReminders() {
+  if (!state.reminders.length) {
+    ui.reminderList.innerHTML =
+      '<div class="empty-state">提醒和待办会自动出现在这里，也可以通过语音说“提醒我……”来生成。</div>';
+    return;
+  }
+
+  const sortedItems = [...state.reminders].sort((a, b) => {
+    const aTime = a.remindAt || a.dueAt || a.createdAt;
+    const bTime = b.remindAt || b.dueAt || b.createdAt;
+    return new Date(aTime) - new Date(bTime);
+  });
+
+  ui.reminderList.innerHTML = sortedItems
+    .map(
+      (item) => `
+        <article class="list-item">
+          <div class="list-item__top">
+            <div>
+              <span class="type-pill">${item.kind === "todo" ? "待办" : "提醒"}</span>
+              <h3>${escapeHtml(item.title)}</h3>
+            </div>
+            <span class="time-pill">${escapeHtml(formatDateTime(item.remindAt || item.dueAt || item.createdAt))}</span>
+          </div>
+          <p>${escapeHtml(item.note || "由助理从语音内容自动提取")}</p>
+          <div class="list-item__footer">
+            <span>${escapeHtml(item.source === "assistant" ? "来自语音助理" : "系统生成")}</span>
+            <button class="small-button ${item.status === "done" ? "is-complete" : ""}" type="button" data-action="toggle" data-type="reminder" data-id="${item.id}">
+              ${item.status === "done" ? "已完成" : "标记完成"}
+            </button>
+          </div>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderTravel() {
+  if (!state.travelRequests.length) {
+    ui.travelList.innerHTML =
+      '<div class="empty-state">当你说到高铁、航班、酒店、接送机等需求时，系统会自动生成差旅预订请求。</div>';
+    return;
+  }
+
+  const sortedTravel = [...state.travelRequests].sort((a, b) => new Date(a.departAt) - new Date(b.departAt));
+
+  ui.travelList.innerHTML = sortedTravel
+    .map(
+      (item) => `
+        <article class="list-item">
+          <div class="list-item__top">
+            <div>
+              <span class="type-pill">差旅</span>
+              <h3>${escapeHtml(item.title)}</h3>
+            </div>
+            <span class="time-pill">${escapeHtml(item.status)}</span>
+          </div>
+          <p>${escapeHtml(item.route)} · ${escapeHtml(formatDateTime(item.departAt))}</p>
+          <div class="list-item__footer">
+            <span>${escapeHtml(item.note)}</span>
+            <button class="small-button ${item.status === "已完成" ? "is-complete" : ""}" type="button" data-action="toggle-travel" disabled>
+              接口待接入
+            </button>
+          </div>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function parseAssistantInput(input) {
+  const now = new Date();
+  const startAt = parseDateTime(input, now);
+  const durationMinutes = parseDurationMinutes(input);
+  const endAt = startAt ? new Date(startAt.getTime() + durationMinutes * 60 * 1000) : null;
+
+  const title = buildEventTitle(input);
+  const location = extractLocation(input);
+  const participants = extractParticipants(input);
+
+  const reminders = buildReminders(input, startAt, title);
+  const todos = buildTodos(input, startAt);
+  const travelRequest = buildTravelRequest(input, startAt);
+  const hasIntent = Boolean(startAt || reminders.length || todos.length || travelRequest);
+
+  return {
+    raw: input,
+    createdAt: now.toISOString(),
+    confidence: hasIntent ? 0.84 : 0.42,
+    summary: buildSummary(input, startAt, location),
+    calendarEvent: startAt
+      ? {
+          title,
+          startAt: startAt.toISOString(),
+          endAt: endAt.toISOString(),
+          location,
+          participants,
+          notes: "来自语音 / 文本自动整理",
+        }
+      : null,
+    reminders,
+    todos,
+    travelRequest,
+  };
+}
+
+function buildSummary(input, startAt, location) {
+  if (!startAt) {
+    return "系统识别到你可能在描述提醒、待办或差旅安排，但缺少完整时间。";
+  }
+
+  const segments = [
+    `已识别 ${formatDateTime(startAt.toISOString())} 的安排`,
+    location ? `地点在 ${location}` : "地点待补充",
+    "可一键写入行事历并生成配套提醒",
+  ];
+  return segments.join("，") + "。";
+}
+
+function buildEventTitle(input) {
+  const matchByContact = input.match(/和([\u4e00-\u9fa5A-Za-z0-9·]{1,10})(?:在|于|电话|视频|见面|沟通|开会|吃饭)/);
+  if (matchByContact) {
+    if (/(电话|视频)/.test(input)) {
+      return `与${matchByContact[1]}沟通`;
+    }
+    if (/吃饭|晚餐|午餐/.test(input)) {
+      return `与${matchByContact[1]}商务会面`;
+    }
+    return `与${matchByContact[1]}会面`;
+  }
+
+  const activityPairs = [
+    ["开会", "会议安排"],
+    ["会议", "会议安排"],
+    ["拜访", "客户拜访"],
+    ["见面", "商务见面"],
+    ["沟通", "业务沟通"],
+    ["电话", "电话沟通"],
+    ["视频", "视频会议"],
+    ["出差", "出差行程"],
+    ["晚餐", "商务晚餐"],
+    ["午餐", "商务午餐"],
+  ];
+
+  const found = activityPairs.find(([keyword]) => input.includes(keyword));
+  if (found) {
+    return found[1];
+  }
+
+  return "待确认安排";
+}
+
+function buildReminders(input, startAt, title) {
+  const reminders = [];
+  const offsetMatch = input.match(/提前([一二两三四五六七八九十\d半]+)(小时|分钟)/);
+
+  if (offsetMatch && startAt) {
+    const amount = parseChineseNumber(offsetMatch[1], offsetMatch[2] === "小时");
+    const remindAt = new Date(
+      startAt.getTime() -
+        amount * (offsetMatch[2] === "小时" ? 60 * 60 * 1000 : 60 * 1000)
+    );
+    reminders.push({
+      kind: "reminder",
+      title: `${title}前提醒`,
+      remindAt: remindAt.toISOString(),
+      note: `根据“提前${offsetMatch[1]}${offsetMatch[2]}”自动生成`,
+    });
+  }
+
+  const plainReminderMatch = input.match(/提醒我(.+?)(?:，|。|$)/);
+  if (plainReminderMatch) {
+    const reminderText = plainReminderMatch[1].trim();
+    const derivedTitle = offsetMatch && /出发/.test(reminderText) ? "出发" : reminderText;
+
+    reminders.push({
+      kind: "reminder",
+      title: derivedTitle,
+      remindAt: startAt
+        ? new Date(startAt.getTime() - 30 * 60 * 1000).toISOString()
+        : new Date().toISOString(),
+      note: "来自口述中的明确提醒动作",
+    });
+  }
+
+  return dedupeByTitle(reminders);
+}
+
+function buildTodos(input, startAt) {
+  const todos = [];
+  const todoVerbs = ["准备", "确认", "发送", "跟进", "联系", "整理", "带上"];
+
+  todoVerbs.forEach((verb) => {
+    const match = input.match(new RegExp(`${verb}([^，。]+)`));
+    if (!match) {
+      return;
+    }
+
+    todos.push({
+      title: `${verb}${match[1].trim()}`,
+      dueAt: startAt ? new Date(startAt.getTime() - 60 * 60 * 1000).toISOString() : new Date().toISOString(),
+      note: "助理从描述中的动作词自动提炼",
+    });
+  });
+
+  return dedupeByTitle(todos);
+}
+
+function buildTravelRequest(input, startAt) {
+  const travelIntent = /(高铁|火车|航班|飞机|机票|酒店|接机|送机|差旅|出差|预定|订)/.test(input);
+  if (!travelIntent) {
+    return null;
+  }
+
+  const mode = input.includes("高铁") || input.includes("火车") ? "高铁 / 火车" : input.includes("酒店") ? "酒店 / 差旅服务" : "航班 / 差旅服务";
+  const route = extractRoute(input);
+  const departAt = startAt || parseDateTime(input, new Date()) || addDays(new Date(), 1);
+
+  return {
+    title: "差旅预订请求",
+    mode,
+    route,
+    departAt: departAt.toISOString(),
+    note: "当前版本先生成预订请求卡片，后续可直接对接企业差旅系统。",
+  };
+}
+
+function extractParticipants(input) {
+  const match = input.match(/和([\u4e00-\u9fa5A-Za-z0-9·]{1,12})/);
+  return match ? `${match[1]}` : "";
+}
+
+function extractLocation(input) {
+  const patterns = [
+    /在([\u4e00-\u9fa5A-Za-z0-9·]{2,18})(?:见面|开会|会面|吃饭|碰头|电话|视频|沟通)/,
+    /去([\u4e00-\u9fa5A-Za-z0-9·]{2,18})(?:出差|拜访|开会|见客户|见面)/,
+    /到([\u4e00-\u9fa5A-Za-z0-9·]{2,18})(?:出差|开会|见面|机场|高铁站)/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = input.match(pattern);
+    if (match) {
+      return match[1];
+    }
+  }
+
+  return "";
+}
+
+function extractRoute(input) {
+  const routePatterns = [
+    /从([\u4e00-\u9fa5A-Za-z0-9·]{2,10})到([\u4e00-\u9fa5A-Za-z0-9·]{2,10})/,
+    /去([\u4e00-\u9fa5A-Za-z0-9·]{2,10})/,
+    /飞([\u4e00-\u9fa5A-Za-z0-9·]{2,10})/,
+  ];
+
+  for (const pattern of routePatterns) {
+    const match = input.match(pattern);
+    if (match) {
+      if (match[2]) {
+        return `${match[1]} -> ${match[2]}`;
+      }
+      return `前往 ${match[1]}`;
+    }
+  }
+
+  return "路线待确认";
+}
+
+function parseDateTime(input, baseDate) {
+  let targetDate = null;
+
+  if (/今天/.test(input)) {
+    targetDate = startOfDay(baseDate);
+  } else if (/明天/.test(input)) {
+    targetDate = addDays(startOfDay(baseDate), 1);
+  } else if (/后天/.test(input)) {
+    targetDate = addDays(startOfDay(baseDate), 2);
+  } else {
+    const absoluteDate = input.match(/(\d{1,2})月(\d{1,2})[日号]?/);
+    if (absoluteDate) {
+      const year = baseDate.getFullYear();
+      targetDate = new Date(year, Number(absoluteDate[1]) - 1, Number(absoluteDate[2]));
+    } else {
+      const weekDate = parseWeekday(input, baseDate);
+      if (weekDate) {
+        targetDate = weekDate;
+      }
+    }
+  }
+
+  if (!targetDate) {
+    return null;
+  }
+
+  const timeParts = parseTime(input);
+  targetDate.setHours(timeParts.hours, timeParts.minutes, 0, 0);
+  return targetDate;
+}
+
+function parseWeekday(input, baseDate) {
+  const weekMap = {
+    一: 1,
+    二: 2,
+    三: 3,
+    四: 4,
+    五: 5,
+    六: 6,
+    日: 0,
+    天: 0,
+  };
+
+  const match = input.match(/(下周|这周|本周|周)([一二三四五六日天])/);
+  if (!match) {
+    return null;
+  }
+
+  const current = new Date(baseDate);
+  const target = weekMap[match[2]];
+  const currentDay = current.getDay();
+  let diff = target - currentDay;
+
+  if (match[1] === "下周") {
+    diff += 7;
+  } else if (diff < 0) {
+    diff += 7;
+  }
+
+  return addDays(startOfDay(current), diff);
+}
+
+function parseTime(input) {
+  const match = input.match(/(上午|中午|下午|晚上)?([零一二两三四五六七八九十\d]{1,3})点(?:(半)|([零一二三四五六七八九十\d]{1,3})分?)?/);
+  if (!match) {
+    if (/晚上/.test(input)) {
+      return { hours: 19, minutes: 0 };
+    }
+    if (/中午/.test(input)) {
+      return { hours: 12, minutes: 0 };
+    }
+    if (/下午/.test(input)) {
+      return { hours: 15, minutes: 0 };
+    }
+    if (/上午/.test(input)) {
+      return { hours: 9, minutes: 0 };
+    }
+    return { hours: 9, minutes: 0 };
+  }
+
+  let hours = parseChineseNumber(match[2], true);
+  let minutes = 0;
+
+  if (match[3]) {
+    minutes = 30;
+  } else if (match[4]) {
+    minutes = parseChineseNumber(match[4], false);
+  }
+
+  if ((match[1] === "下午" || match[1] === "晚上") && hours < 12) {
+    hours += 12;
+  }
+
+  if (match[1] === "中午" && hours < 11) {
+    hours += 12;
+  }
+
+  return { hours, minutes };
+}
+
+function parseDurationMinutes(input) {
+  const explicitDuration =
+    input.match(
+      /(?:时长|持续|大概|预计)([一二两三四五六七八九十\d半个]+)(小时|分钟)/
+    ) ||
+    input.match(
+      /([一二两三四五六七八九十\d半个]+)(小时|分钟)(?:的)?(?:会议|沟通|会面|见面|拜访)/
+    );
+
+  const match = explicitDuration;
+  if (!match) {
+    return 60;
+  }
+
+  const value = parseChineseNumber(match[1], match[2] === "小时");
+  return match[2] === "小时" ? value * 60 : value;
+}
+
+function parseChineseNumber(raw, allowHalfHour) {
+  const normalized = raw.replace(/个/g, "");
+
+  if (normalized === "半") {
+    return allowHalfHour ? 0.5 : 30;
+  }
+
+  if (/^\d+$/.test(normalized)) {
+    return Number(normalized);
+  }
+
+  const map = {
+    零: 0,
+    一: 1,
+    二: 2,
+    两: 2,
+    三: 3,
+    四: 4,
+    五: 5,
+    六: 6,
+    七: 7,
+    八: 8,
+    九: 9,
+    十: 10,
+  };
+
+  if (normalized.length === 1) {
+    return map[normalized] ?? 0;
+  }
+
+  if (normalized.includes("十")) {
+    const [left, right] = normalized.split("十");
+    const tens = left ? map[left] : 1;
+    const ones = right ? map[right] : 0;
+    return tens * 10 + ones;
+  }
+
+  return map[normalized] ?? 0;
+}
+
+function dedupeByTitle(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    if (seen.has(item.title)) {
+      return false;
+    }
+    seen.add(item.title);
+    return true;
+  });
+}
+
+function scheduleReminderNotifications() {
+  reminderTimers.forEach((timer) => window.clearTimeout(timer));
+  reminderTimers = [];
+
+  if (!("Notification" in window) || Notification.permission !== "granted") {
+    return;
+  }
+
+  state.reminders
+    .filter((item) => item.status !== "done" && item.kind !== "todo" && item.remindAt)
+    .forEach((item) => {
+      const delta = new Date(item.remindAt).getTime() - Date.now();
+      if (delta <= 0 || delta > 24 * 60 * 60 * 1000) {
+        return;
+      }
+
+      const timer = window.setTimeout(() => {
+        new Notification("行程助理提醒", {
+          body: item.title,
+        });
+      }, delta);
+
+      reminderTimers.push(timer);
+    });
+}
+
+function requestNotificationPermission() {
+  if (!("Notification" in window)) {
+    ui.voiceStatus.textContent = "当前浏览器不支持通知提醒";
+    return;
+  }
+
+  Notification.requestPermission().then((permission) => {
+    ui.voiceStatus.textContent =
+      permission === "granted" ? "提醒权限已开启" : "未开启系统提醒，可继续使用列表提醒";
+    scheduleReminderNotifications();
+  });
+}
+
+function handleInstallClick() {
+  if (isStandaloneMode()) {
+    ui.voiceStatus.textContent = "当前已经是桌面应用模式";
+    return;
+  }
+
+  if (installPromptEvent) {
+    installPromptEvent.prompt();
+    installPromptEvent.userChoice.finally(() => {
+      installPromptEvent = null;
+      ui.installButton.hidden = true;
+    });
+    return;
+  }
+
+  if (isIosDevice()) {
+    window.alert(
+      "请用 Safari 打开本站，点击底部“分享”，再选择“添加到主屏幕”。"
+    );
+    return;
+  }
+
+  window.alert("请在浏览器菜单中选择“安装应用”或“添加到主屏幕”。");
+}
+
+function toggleVoiceInput() {
+  if (!speechApi) {
+    ui.voiceStatus.textContent = "当前浏览器不支持语音识别，可直接输入文字";
+    return;
+  }
+
+  if (!recognition) {
+    recognition = new speechApi();
+    recognition.lang = "zh-CN";
+    recognition.interimResults = true;
+    recognition.continuous = false;
+
+    recognition.onstart = () => {
+      ui.voiceStatus.textContent = "正在听你说话…";
+      ui.listenButton.textContent = "停止录音";
+    };
+
+    recognition.onresult = (event) => {
+      const text = Array.from(event.results)
+        .map((result) => result[0].transcript)
+        .join("");
+      ui.captureInput.value = text;
+
+      if (event.results[event.results.length - 1].isFinal) {
+        ui.voiceStatus.textContent = "语音已转文字，可以生成草稿";
+      }
+    };
+
+    recognition.onend = () => {
+      ui.listenButton.textContent = "语音录入";
+    };
+
+    recognition.onerror = () => {
+      ui.voiceStatus.textContent = "语音识别失败，请改为文字输入";
+      ui.listenButton.textContent = "语音录入";
+    };
+  }
+
+  if (ui.listenButton.textContent === "停止录音") {
+    recognition.stop();
+    ui.voiceStatus.textContent = "已停止录音";
+    return;
+  }
+
+  recognition.start();
+}
+
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) {
+    return;
+  }
+
+  navigator.serviceWorker.register("./sw.js").catch(() => {});
+}
+
+function isIosDevice() {
+  return /iphone|ipad|ipod/i.test(window.navigator.userAgent);
+}
+
+function isStandaloneMode() {
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true
+  );
+}
+
+function loadState() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if (stored) {
+      return stored;
+    }
+  } catch (error) {
+    console.warn("load state failed", error);
+  }
+
+  const now = new Date();
+  const nextMeeting = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+
+  return {
+    draft: null,
+    events: [
+      {
+        id: crypto.randomUUID(),
+        title: "与运营团队晨会",
+        startAt: nextMeeting.toISOString(),
+        endAt: new Date(nextMeeting.getTime() + 60 * 60 * 1000).toISOString(),
+        location: "线上会议",
+        participants: "运营团队",
+        notes: "示例数据，可自行覆盖",
+        status: "scheduled",
+      },
+    ],
+    reminders: [
+      {
+        id: crypto.randomUUID(),
+        kind: "reminder",
+        title: "确认客户会面资料",
+        remindAt: new Date(now.getTime() + 90 * 60 * 1000).toISOString(),
+        note: "示例提醒",
+        source: "system",
+        status: "pending",
+      },
+    ],
+    travelRequests: [],
+  };
+}
+
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function formatDateTime(dateInput, timeOnly = false) {
+  const date = new Date(dateInput);
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  const hours = `${date.getHours()}`.padStart(2, "0");
+  const minutes = `${date.getMinutes()}`.padStart(2, "0");
+  return timeOnly ? `${hours}:${minutes}` : `${month}-${day} ${hours}:${minutes}`;
+}
+
+function startOfDay(date) {
+  const cloned = new Date(date);
+  cloned.setHours(0, 0, 0, 0);
+  return cloned;
+}
+
+function addDays(date, offset) {
+  const cloned = new Date(date);
+  cloned.setDate(cloned.getDate() + offset);
+  return cloned;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
