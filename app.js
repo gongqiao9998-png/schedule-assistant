@@ -3,6 +3,7 @@ const STORAGE_KEY = "assistant-schedule-mvp";
 const state = loadState();
 const ui = {
   summaryCards: document.querySelector("#summaryCards"),
+  heroBrief: document.querySelector("#heroBrief"),
   captureInput: document.querySelector("#captureInput"),
   parseButton: document.querySelector("#parseButton"),
   clearButton: document.querySelector("#clearButton"),
@@ -12,6 +13,7 @@ const ui = {
   voiceStatus: document.querySelector("#voiceStatus"),
   draftContent: document.querySelector("#draftContent"),
   draftConfidence: document.querySelector("#draftConfidence"),
+  assistantBrief: document.querySelector("#assistantBrief"),
   agendaList: document.querySelector("#agendaList"),
   reminderList: document.querySelector("#reminderList"),
   travelList: document.querySelector("#travelList"),
@@ -65,6 +67,14 @@ function bindEvents() {
     const { action, type, id } = actionButton.dataset;
     if (action === "save-draft") {
       persistDraft();
+    }
+
+    if (action === "demo-mail") {
+      importDemoMailInvite();
+    }
+
+    if (action === "demo-calendar") {
+      importDemoCalendarEvent();
     }
 
     if (action === "toggle" && type) {
@@ -182,7 +192,9 @@ function toggleItemStatus(type, id) {
 
 function render() {
   renderSummary();
+  renderHeroBrief();
   renderDraft();
+  renderAssistantBrief();
   renderAgenda();
   renderReminders();
   renderTravel();
@@ -203,17 +215,17 @@ function renderSummary() {
 
   const cards = [
     {
-      label: "今日安排",
+      label: "今日会议",
       value: `${todayEvents.length}`,
       helper: todayEvents[0] ? formatDateTime(todayEvents[0].startAt) : "今天暂无会议",
     },
     {
-      label: "待提醒 / 待办",
+      label: "待处理事项",
       value: `${pendingReminders.length}`,
       helper: pendingReminders[0] ? pendingReminders[0].title : "提醒已清空",
     },
     {
-      label: "差旅请求",
+      label: "待预订差旅",
       value: `${pendingTravel.length}`,
       helper: pendingTravel[0] ? pendingTravel[0].title : "目前没有待预订行程",
     },
@@ -232,12 +244,32 @@ function renderSummary() {
     .join("");
 }
 
+function renderHeroBrief() {
+  const nextEvent = getNextUpcomingEvent();
+  const pendingCount = state.reminders.filter((item) => item.status !== "done").length;
+
+  if (nextEvent) {
+    ui.heroBrief.innerHTML = `
+      <strong>助理提示：</strong>
+      下一项重点安排是 <strong>${escapeHtml(nextEvent.title)}</strong>，
+      时间在 ${escapeHtml(formatDateTime(nextEvent.startAt))}。
+      当前还有 ${pendingCount} 项提醒与待办待处理。
+    `;
+    return;
+  }
+
+  ui.heroBrief.innerHTML = `
+    <strong>助理提示：</strong>
+    你今天还没有紧迫会议，适合先把临时约见、待办和差旅行程一次性说给我整理。
+  `;
+}
+
 function renderDraft() {
   if (!state.draft) {
     ui.draftConfidence.textContent = "等待输入";
     ui.draftContent.className = "draft-empty";
     ui.draftContent.textContent =
-      "输入一段语音或文字后，系统会自动拆出日程、提醒、待办和差旅行程。";
+      "输入一段语音或文字后，我会先帮你形成一版助理建议，你确认后再写入正式工作台。";
     return;
   }
 
@@ -317,6 +349,22 @@ function renderDraft() {
       </div>
     </article>
   `;
+}
+
+function renderAssistantBrief() {
+  const briefItems = buildAssistantBriefItems();
+
+  ui.assistantBrief.innerHTML = briefItems
+    .map(
+      (item) => `
+        <article class="brief-item">
+          <span class="type-pill">${escapeHtml(item.tag)}</span>
+          <strong>${escapeHtml(item.title)}</strong>
+          <p>${escapeHtml(item.description)}</p>
+        </article>
+      `
+    )
+    .join("");
 }
 
 function renderAgenda() {
@@ -422,6 +470,53 @@ function renderTravel() {
     .join("");
 }
 
+function buildAssistantBriefItems() {
+  const nextEvent = getNextUpcomingEvent();
+  const pendingReminders = state.reminders.filter((item) => item.status !== "done");
+  const pendingTravel = state.travelRequests.filter((item) => item.status !== "已完成");
+  const items = [];
+
+  if (nextEvent) {
+    items.push({
+      tag: "重点安排",
+      title: nextEvent.title,
+      description: `${formatDateTime(nextEvent.startAt)} · ${
+        nextEvent.location || "地点待补充"
+      }`,
+    });
+  } else {
+    items.push({
+      tag: "日程空档",
+      title: "今天没有新增会议压力",
+      description: "如果你有临时拜访、电话沟通或商务餐叙，可以直接语音录入让我补齐。",
+    });
+  }
+
+  items.push({
+    tag: "待跟进",
+    title: `还有 ${pendingReminders.length} 项提醒 / 待办`,
+    description: pendingReminders[0]
+      ? `当前最靠前的是：${pendingReminders[0].title}`
+      : "当前没有待处理提醒，适合清理新的安排。",
+  });
+
+  items.push({
+    tag: "外部同步",
+    title: "可继续导入邮件邀约或系统日历",
+    description: "下方同步区已经预留了演示按钮，后续可以替换成真实邮箱和日历接口。",
+  });
+
+  if (pendingTravel.length) {
+    items.push({
+      tag: "差旅关注",
+      title: `${pendingTravel.length} 条差旅请求待确认`,
+      description: `最近一条是：${pendingTravel[0].route}，状态为 ${pendingTravel[0].status}。`,
+    });
+  }
+
+  return items;
+}
+
 function parseAssistantInput(input) {
   const now = new Date();
   const startAt = parseDateTime(input, now);
@@ -460,7 +555,7 @@ function parseAssistantInput(input) {
 
 function buildSummary(input, startAt, location) {
   if (!startAt) {
-    return "系统识别到你可能在描述提醒、待办或差旅安排，但缺少完整时间。";
+    return "我识别到你在描述提醒、待办或差旅，但还缺一个明确时间，补一句日期或时段会更完整。";
   }
 
   const segments = [
@@ -469,6 +564,80 @@ function buildSummary(input, startAt, location) {
     "可一键写入行事历并生成配套提醒",
   ];
   return segments.join("，") + "。";
+}
+
+function importDemoMailInvite() {
+  const title = "客户邮件邀约：季度合作复盘会";
+  if (state.events.some((event) => event.title === title)) {
+    ui.voiceStatus.textContent = "邮件邀约示例已经导入过了";
+    return;
+  }
+
+  const startAt = getNextBusinessSlot(1, 14, 30);
+  const endAt = new Date(startAt.getTime() + 60 * 60 * 1000);
+
+  state.events.unshift({
+    id: crypto.randomUUID(),
+    title,
+    startAt: startAt.toISOString(),
+    endAt: endAt.toISOString(),
+    location: "腾讯会议 / 邮件邀请",
+    participants: "张总、商务团队",
+    notes: "模拟从企业邮箱抓取的会议邀约",
+    status: "scheduled",
+  });
+
+  state.reminders.unshift({
+    id: crypto.randomUUID(),
+    kind: "reminder",
+    title: "会前确认邮件材料",
+    remindAt: new Date(startAt.getTime() - 45 * 60 * 1000).toISOString(),
+    note: "模拟伴随邮件邀约生成的会前提醒",
+    source: "mail-demo",
+    status: "pending",
+  });
+
+  saveState();
+  render();
+  scheduleReminderNotifications();
+  ui.voiceStatus.textContent = "已导入一条邮件邀约示例";
+}
+
+function importDemoCalendarEvent() {
+  const title = "系统日历同步：管理周例会";
+  if (state.events.some((event) => event.title === title)) {
+    ui.voiceStatus.textContent = "系统日历示例已经同步过了";
+    return;
+  }
+
+  const startAt = getNextBusinessSlot(2, 9, 30);
+  const endAt = new Date(startAt.getTime() + 90 * 60 * 1000);
+
+  state.events.unshift({
+    id: crypto.randomUUID(),
+    title,
+    startAt: startAt.toISOString(),
+    endAt: endAt.toISOString(),
+    location: "总部 8F 大会议室",
+    participants: "管理层",
+    notes: "模拟从手机系统日历同步的既有安排",
+    status: "scheduled",
+  });
+
+  state.reminders.unshift({
+    id: crypto.randomUUID(),
+    kind: "reminder",
+    title: "同步安排后的会前提醒",
+    remindAt: new Date(startAt.getTime() - 30 * 60 * 1000).toISOString(),
+    note: "模拟同步系统日历后自动生成的提醒",
+    source: "calendar-demo",
+    status: "pending",
+  });
+
+  saveState();
+  render();
+  scheduleReminderNotifications();
+  ui.voiceStatus.textContent = "已同步一条系统日历示例";
 }
 
 function buildEventTitle(input) {
@@ -960,6 +1129,18 @@ function loadState() {
     ],
     travelRequests: [],
   };
+}
+
+function getNextUpcomingEvent() {
+  return [...state.events]
+    .filter((event) => event.status !== "done" && new Date(event.startAt) >= new Date())
+    .sort((a, b) => new Date(a.startAt) - new Date(b.startAt))[0];
+}
+
+function getNextBusinessSlot(offsetDays, hour, minute) {
+  const date = addDays(startOfDay(new Date()), offsetDays);
+  date.setHours(hour, minute, 0, 0);
+  return date;
 }
 
 function saveState() {
