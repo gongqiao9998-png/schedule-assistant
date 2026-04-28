@@ -312,6 +312,78 @@ a:hover {
   line-height: 1.7;
 }
 
+.mail-helper {
+  display: grid;
+  gap: 14px;
+}
+
+.mail-import-composer {
+  display: grid;
+  gap: 12px;
+}
+
+.mail-import-composer textarea {
+  width: 100%;
+  min-height: 140px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.82);
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+}
+
+.mail-import-composer textarea:focus {
+  border-color: rgba(18, 60, 58, 0.42);
+  box-shadow: 0 0 0 4px rgba(18, 60, 58, 0.08);
+}
+
+.mail-import-result {
+  display: grid;
+  gap: 14px;
+}
+
+.mail-decision {
+  padding: 18px;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, rgba(198, 95, 45, 0.12), rgba(255, 255, 255, 0.72));
+  border: 1px solid rgba(198, 95, 45, 0.16);
+}
+
+.mail-decision p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.mail-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mail-detail-item {
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-strong);
+  border: 1px solid rgba(18, 60, 58, 0.08);
+}
+
+.mail-detail-item span {
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.mail-detail-item strong {
+  display: block;
+  margin-top: 10px;
+  line-height: 1.5;
+}
+
 .draft-grid,
 .sync-grid {
   display: grid;
@@ -469,7 +541,8 @@ a:hover {
 
   .hero__summary,
   .draft-grid,
-  .sync-grid {
+  .sync-grid,
+  .mail-detail-grid {
     display: grid;
   }
 

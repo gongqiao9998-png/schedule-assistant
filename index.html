@@ -114,6 +114,18 @@
           <div id="assistantBrief" class="stack-list"></div>
         </section>
 
+        <section class="card mail-card" id="mailImport">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Forwarded Mail</p>
+              <h2>转发邮件导入</h2>
+            </div>
+          </div>
+          <div id="mailImportStatus" class="draft-empty">
+            你可以把重要会议邀请一键转发给助理，或者先粘贴邮件内容 / 上传 `.ics` 做导入演示。
+          </div>
+        </section>
+
         <section class="card agenda-card" id="agenda">
           <div class="section-heading">
             <div>
@@ -154,11 +166,17 @@
           <div class="sync-grid">
             <article class="sync-item">
               <span class="sync-badge sync-badge--ready">演示入口</span>
-              <h3>邮件邀约</h3>
-              <p>模拟从企业邮箱导入一条会议邀约，直接写入你的行程和提醒。</p>
+              <h3>导入转发邮件</h3>
+              <p>适合你当前的公司邮箱场景。先一键转发重要会议，再由助理识别成日程、提醒和待办。</p>
               <div class="capture-actions">
-                <button class="small-button" type="button" data-action="demo-mail">
-                  导入一条邮件邀约
+                <button class="small-button" type="button" data-action="mail-forwarded">
+                  我已转发给助理
+                </button>
+                <button class="small-button" type="button" data-action="mail-paste">
+                  粘贴邮件内容
+                </button>
+                <button class="small-button" type="button" data-action="mail-upload-ics">
+                  上传 .ics
                 </button>
               </div>
             </article>
@@ -180,6 +198,13 @@
           </div>
         </section>
       </main>
+
+      <input
+        id="mailFileInput"
+        type="file"
+        accept=".ics,text/calendar,message/rfc822,.eml"
+        hidden
+      />
 
       <nav class="bottom-nav">
         <a href="#capture">录入</a>

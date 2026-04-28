@@ -14,6 +14,8 @@ const ui = {
   draftContent: document.querySelector("#draftContent"),
   draftConfidence: document.querySelector("#draftConfidence"),
   assistantBrief: document.querySelector("#assistantBrief"),
+  mailImportStatus: document.querySelector("#mailImportStatus"),
+  mailFileInput: document.querySelector("#mailFileInput"),
   agendaList: document.querySelector("#agendaList"),
   reminderList: document.querySelector("#reminderList"),
   travelList: document.querySelector("#travelList"),
@@ -57,6 +59,7 @@ function bindEvents() {
   ui.listenButton.addEventListener("click", toggleVoiceInput);
   ui.installButton.addEventListener("click", handleInstallClick);
   ui.notifyButton.addEventListener("click", requestNotificationPermission);
+  ui.mailFileInput.addEventListener("change", handleMailFileChange);
 
   document.addEventListener("click", (event) => {
     const actionButton = event.target.closest("[data-action]");
@@ -75,6 +78,36 @@ function bindEvents() {
 
     if (action === "demo-calendar") {
       importDemoCalendarEvent();
+    }
+
+    if (action === "mail-forwarded") {
+      startForwardedMailFlow();
+    }
+
+    if (action === "mail-check") {
+      simulateForwardedMailRecognition();
+    }
+
+    if (action === "mail-paste") {
+      openMailPasteComposer();
+    }
+
+    if (action === "mail-parse-paste") {
+      parsePastedMail();
+    }
+
+    if (action === "mail-upload-ics") {
+      ui.mailFileInput.click();
+    }
+
+    if (action === "confirm-mail-import") {
+      confirmMailImport();
+    }
+
+    if (action === "dismiss-mail-import") {
+      state.mailImport = null;
+      saveState();
+      renderMailImport();
     }
 
     if (action === "toggle" && type) {
@@ -195,6 +228,7 @@ function render() {
   renderHeroBrief();
   renderDraft();
   renderAssistantBrief();
+  renderMailImport();
   renderAgenda();
   renderReminders();
   renderTravel();
@@ -207,7 +241,7 @@ function renderSummary() {
 
   const todayEvents = state.events.filter((event) => {
     const start = new Date(event.startAt);
-    return start >= todayStart && start < tomorrowStart;
+    return event.status !== "cancelled" && start >= todayStart && start < tomorrowStart;
   });
 
   const pendingReminders = state.reminders.filter((item) => item.status !== "done");
@@ -367,6 +401,84 @@ function renderAssistantBrief() {
     .join("");
 }
 
+function renderMailImport() {
+  const importState = state.mailImport;
+
+  if (!importState) {
+    ui.mailImportStatus.className = "draft-empty";
+    ui.mailImportStatus.innerHTML =
+      "你可以把重要会议邀请一键转发给助理，或者先粘贴邮件内容 / 上传 <code>.ics</code> 做导入演示。";
+    return;
+  }
+
+  if (importState.mode === "forwarded_waiting") {
+    ui.mailImportStatus.className = "mail-helper";
+    ui.mailImportStatus.innerHTML = `
+      <div class="mail-decision">
+        <strong>第 1 步已完成：你已把会议转发给助理</strong>
+        <p>下一步可以模拟“助理收件并识别最新转发邮件”。正式接入后，这里会变成真实收件状态。</p>
+      </div>
+      <div class="capture-actions">
+        <button class="primary-button" type="button" data-action="mail-check">模拟收取最新转发邮件</button>
+        <button class="ghost-button" type="button" data-action="dismiss-mail-import">暂时关闭</button>
+      </div>
+    `;
+    return;
+  }
+
+  if (importState.mode === "paste") {
+    ui.mailImportStatus.className = "mail-import-composer";
+    ui.mailImportStatus.innerHTML = `
+      <div class="mail-decision">
+        <strong>把转发邮件正文粘贴到这里</strong>
+        <p>适合你临时不能自动收件时做手动导入。助理会识别标题、时间、地点和是否改期/取消。</p>
+      </div>
+      <textarea id="mailPasteInput" placeholder="请粘贴 Outlook 转发后的会议邮件内容，或包含标题 / 时间 / 地点 / 链接的文本。">${escapeHtml(
+        importState.rawText || ""
+      )}</textarea>
+      <div class="capture-actions">
+        <button class="primary-button" type="button" data-action="mail-parse-paste">开始识别</button>
+        <button class="ghost-button" type="button" data-action="dismiss-mail-import">取消</button>
+      </div>
+    `;
+    return;
+  }
+
+  if (importState.mode === "parsed") {
+    const item = importState.item;
+    ui.mailImportStatus.className = "mail-import-result";
+    ui.mailImportStatus.innerHTML = `
+      <div class="mail-decision">
+        <span class="type-pill">${escapeHtml(item.decisionLabel)}</span>
+        <h3>${escapeHtml(item.title)}</h3>
+        <p>${escapeHtml(item.summary)}</p>
+      </div>
+      <div class="mail-detail-grid">
+        <article class="mail-detail-item">
+          <span>开始时间</span>
+          <strong>${escapeHtml(item.startAt ? formatDateTime(item.startAt) : "待补充")}</strong>
+        </article>
+        <article class="mail-detail-item">
+          <span>结束时间</span>
+          <strong>${escapeHtml(item.endAt ? formatDateTime(item.endAt) : "默认 1 小时后")}</strong>
+        </article>
+        <article class="mail-detail-item">
+          <span>地点 / 链接</span>
+          <strong>${escapeHtml(item.location || item.meetingLink || "待补充")}</strong>
+        </article>
+        <article class="mail-detail-item">
+          <span>组织者</span>
+          <strong>${escapeHtml(item.organizer || "邮件发起人待识别")}</strong>
+        </article>
+      </div>
+      <div class="capture-actions">
+        <button class="primary-button" type="button" data-action="confirm-mail-import">确认导入工作台</button>
+        <button class="ghost-button" type="button" data-action="dismiss-mail-import">稍后处理</button>
+      </div>
+    `;
+  }
+}
+
 function renderAgenda() {
   if (!state.events.length) {
     ui.agendaList.innerHTML =
@@ -385,14 +497,18 @@ function renderAgenda() {
               <span class="type-pill">行程</span>
               <h3>${escapeHtml(event.title)}</h3>
             </div>
-            <span class="time-pill">${escapeHtml(formatDateTime(event.startAt))}</span>
+            <span class="time-pill">${escapeHtml(event.status === "cancelled" ? "已取消" : formatDateTime(event.startAt))}</span>
           </div>
           <p>${escapeHtml(event.location || "地点待定")} · ${escapeHtml(event.participants || "参与人待补充")}</p>
           <div class="list-item__footer">
             <span>${escapeHtml(event.notes || "由助理根据输入自动整理")}</span>
-            <button class="small-button ${event.status === "done" ? "is-complete" : ""}" type="button" data-action="toggle" data-type="event" data-id="${event.id}">
+            ${
+              event.status === "cancelled"
+                ? '<button class="small-button" type="button" disabled>已取消</button>'
+                : `<button class="small-button ${event.status === "done" ? "is-complete" : ""}" type="button" data-action="toggle" data-type="event" data-id="${event.id}">
               ${event.status === "done" ? "已完成" : "标记完成"}
-            </button>
+            </button>`
+            }
           </div>
         </article>
       `
@@ -640,6 +756,218 @@ function importDemoCalendarEvent() {
   ui.voiceStatus.textContent = "已同步一条系统日历示例";
 }
 
+function startForwardedMailFlow() {
+  state.mailImport = {
+    mode: "forwarded_waiting",
+  };
+  saveState();
+  renderMailImport();
+  ui.voiceStatus.textContent = "已记录：你刚刚转发了一封会议邀请";
+}
+
+function simulateForwardedMailRecognition() {
+  const startAt = getNextBusinessSlot(1, 16, 0);
+  const endAt = new Date(startAt.getTime() + 60 * 60 * 1000);
+
+  state.mailImport = {
+    mode: "parsed",
+    item: {
+      title: "客户转发邮件：季度合作复盘会",
+      decision: "create",
+      decisionLabel: "助理判断：新增会议",
+      summary: "已根据你转发的会议邀请识别出一条新增会议，并建议同步生成会前提醒与资料准备待办。",
+      startAt: startAt.toISOString(),
+      endAt: endAt.toISOString(),
+      location: "腾讯会议 / 邮件邀请",
+      organizer: "Vivi 公司邮箱",
+      meetingLink: "https://teams.microsoft.com/",
+      reminderTitle: "会前确认复盘资料",
+      todoTitle: "准备季度合作复盘材料",
+      source: "forwarded-mail",
+    },
+  };
+  saveState();
+  renderMailImport();
+  ui.voiceStatus.textContent = "助理已识别最新转发邮件";
+}
+
+function openMailPasteComposer() {
+  state.mailImport = {
+    mode: "paste",
+    rawText: "",
+  };
+  saveState();
+  renderMailImport();
+}
+
+function parsePastedMail() {
+  const textarea = document.querySelector("#mailPasteInput");
+  const rawText = textarea ? textarea.value.trim() : "";
+
+  if (!rawText) {
+    ui.voiceStatus.textContent = "请先粘贴邮件内容";
+    return;
+  }
+
+  const parsed = buildMailImportFromText(rawText);
+  state.mailImport = {
+    mode: "parsed",
+    item: parsed,
+  };
+  saveState();
+  renderMailImport();
+  ui.voiceStatus.textContent = "助理已完成邮件内容识别";
+}
+
+function handleMailFileChange(event) {
+  const file = event.target.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    const text = typeof reader.result === "string" ? reader.result : "";
+    const parsed = buildMailImportFromIcs(text, file.name);
+    state.mailImport = {
+      mode: "parsed",
+      item: parsed,
+    };
+    saveState();
+    renderMailImport();
+    ui.voiceStatus.textContent = "已完成 .ics 导入识别";
+    ui.mailFileInput.value = "";
+  };
+  reader.readAsText(file);
+}
+
+function buildMailImportFromText(rawText) {
+  const startDate = parseDateTime(rawText, new Date());
+  const endDate = startDate ? new Date(startDate.getTime() + 60 * 60 * 1000) : null;
+  const title = extractMailTitle(rawText) || buildEventTitle(rawText) || "邮件导入会议";
+  const isCancel = /取消|canceled|cancelled/i.test(rawText);
+  const isUpdate = /改期|调整|rescheduled|updated/i.test(rawText);
+
+  return {
+    title,
+    decision: isCancel ? "cancel" : isUpdate ? "update" : "create",
+    decisionLabel: isCancel
+      ? "助理判断：会议取消"
+      : isUpdate
+        ? "助理判断：会议改期 / 更新"
+        : "助理判断：新增会议",
+    summary: isCancel
+      ? "识别到这是一封取消通知，确认后会把原会议标记为取消并关闭关联提醒。"
+      : isUpdate
+        ? "识别到这是一封改期或更新通知，确认后会同步刷新原会议的时间与提醒。"
+        : "识别到这是一封新的会议邀请，确认后会导入行程并自动生成提醒与会前待办。",
+    startAt: startDate ? startDate.toISOString() : null,
+    endAt: endDate ? endDate.toISOString() : null,
+    location: extractLocation(rawText),
+    organizer: extractParticipants(rawText) || "转发邮件发起人",
+    meetingLink: extractMeetingLink(rawText),
+    reminderTitle: `会前确认${title}资料`,
+    todoTitle: `准备${title}会前资料`,
+    source: "pasted-mail",
+  };
+}
+
+function buildMailImportFromIcs(rawText, filename) {
+  const parsed = parseIcsText(rawText);
+
+  return {
+    title: parsed.title || filename || "ICS 会议导入",
+    decision: parsed.method === "CANCEL" || parsed.status === "CANCELLED" ? "cancel" : "create",
+    decisionLabel:
+      parsed.method === "CANCEL" || parsed.status === "CANCELLED"
+        ? "助理判断：会议取消"
+        : "助理判断：新增会议",
+    summary:
+      parsed.method === "CANCEL" || parsed.status === "CANCELLED"
+        ? "这是来自日历附件的取消通知，确认后会把对应会议标记为取消。"
+        : "助理已从 .ics 中识别出会议标题、时间和地点，可直接写入工作台。",
+    startAt: parsed.startAt,
+    endAt: parsed.endAt,
+    location: parsed.location,
+    organizer: parsed.organizer || "ICS 组织者",
+    meetingLink: parsed.meetingLink,
+    reminderTitle: `会前确认${parsed.title || "会议"}资料`,
+    todoTitle: `准备${parsed.title || "会议"}会前资料`,
+    source: "ics-upload",
+  };
+}
+
+function confirmMailImport() {
+  const item = state.mailImport?.item;
+  if (!item) {
+    return;
+  }
+
+  if (item.decision === "cancel") {
+    const existing = state.events.find((event) => event.title.includes(item.title) || item.title.includes(event.title));
+    if (existing) {
+      existing.status = "cancelled";
+      existing.notes = "由转发邮件导入流程标记为已取消";
+    }
+    state.mailImport = null;
+    saveState();
+    render();
+    ui.voiceStatus.textContent = "已按邮件内容处理会议取消";
+    return;
+  }
+
+  const startAt = item.startAt ? new Date(item.startAt) : getNextBusinessSlot(1, 15, 0);
+  const endAt = item.endAt ? new Date(item.endAt) : new Date(startAt.getTime() + 60 * 60 * 1000);
+
+  if (item.decision === "update") {
+    const existing = state.events.find((event) => event.title.includes(item.title) || item.title.includes(event.title));
+    if (existing) {
+      existing.title = item.title;
+      existing.startAt = startAt.toISOString();
+      existing.endAt = endAt.toISOString();
+      existing.location = item.location || existing.location;
+      existing.notes = "由转发邮件导入流程更新";
+    }
+  } else {
+    state.events.unshift({
+      id: crypto.randomUUID(),
+      title: item.title,
+      startAt: startAt.toISOString(),
+      endAt: endAt.toISOString(),
+      location: item.location || item.meetingLink || "邮件邀请待补充地点",
+      participants: item.organizer || "邮件组织者",
+      notes: "来自转发邮件导入",
+      status: "scheduled",
+    });
+  }
+
+  state.reminders.unshift({
+    id: crypto.randomUUID(),
+    kind: "reminder",
+    title: item.reminderTitle,
+    remindAt: new Date(startAt.getTime() - 30 * 60 * 1000).toISOString(),
+    note: "由转发邮件导入自动生成",
+    source: item.source,
+    status: "pending",
+  });
+
+  state.reminders.unshift({
+    id: crypto.randomUUID(),
+    kind: "todo",
+    title: item.todoTitle,
+    dueAt: new Date(startAt.getTime() - 60 * 60 * 1000).toISOString(),
+    note: "由转发邮件导入自动生成",
+    source: item.source,
+    status: "pending",
+  });
+
+  state.mailImport = null;
+  saveState();
+  render();
+  scheduleReminderNotifications();
+  ui.voiceStatus.textContent = "邮件邀请已写入助理工作台";
+}
+
 function buildEventTitle(input) {
   const matchByContact = input.match(/和([\u4e00-\u9fa5A-Za-z0-9·]{1,10})(?:在|于|电话|视频|见面|沟通|开会|吃饭)/);
   if (matchByContact) {
@@ -748,6 +1076,11 @@ function buildTravelRequest(input, startAt) {
   };
 }
 
+function extractMailTitle(text) {
+  const match = text.match(/主题[:：]\s*(.+)/);
+  return match ? match[1].trim() : "";
+}
+
 function extractParticipants(input) {
   const match = input.match(/和([\u4e00-\u9fa5A-Za-z0-9·]{1,12})/);
   return match ? `${match[1]}` : "";
@@ -788,6 +1121,98 @@ function extractRoute(input) {
   }
 
   return "路线待确认";
+}
+
+function extractMeetingLink(text) {
+  const match = text.match(/https?:\/\/[^\s]+/i);
+  return match ? match[0] : "";
+}
+
+function parseIcsText(rawText) {
+  const unfolded = rawText.replace(/\r\n/g, "\n").split("\n").reduce((acc, line) => {
+    if (/^[ \t]/.test(line) && acc.length) {
+      acc[acc.length - 1] += line.slice(1);
+    } else {
+      acc.push(line);
+    }
+    return acc;
+  }, []);
+
+  const result = {
+    method: "",
+    status: "",
+    title: "",
+    startAt: null,
+    endAt: null,
+    location: "",
+    organizer: "",
+    meetingLink: "",
+  };
+
+  unfolded.forEach((line) => {
+    if (line.startsWith("METHOD:")) {
+      result.method = line.slice(7).trim().toUpperCase();
+    }
+    if (line.startsWith("SUMMARY:")) {
+      result.title = decodeIcsValue(line.slice(8));
+    }
+    if (line.startsWith("STATUS:")) {
+      result.status = line.slice(7).trim().toUpperCase();
+    }
+    if (line.startsWith("LOCATION:")) {
+      result.location = decodeIcsValue(line.slice(9));
+    }
+    if (line.startsWith("DESCRIPTION:")) {
+      result.meetingLink = extractMeetingLink(decodeIcsValue(line.slice(12)));
+    }
+    if (line.startsWith("ORGANIZER")) {
+      result.organizer = line.includes("CN=")
+        ? line.match(/CN=([^;:]+)/)?.[1] || "ICS 组织者"
+        : "ICS 组织者";
+    }
+    if (line.startsWith("DTSTART")) {
+      result.startAt = parseIcsDateValue(line);
+    }
+    if (line.startsWith("DTEND")) {
+      result.endAt = parseIcsDateValue(line);
+    }
+  });
+
+  return result;
+}
+
+function decodeIcsValue(value) {
+  return value
+    .replace(/\\n/gi, "\n")
+    .replace(/\\,/g, ",")
+    .replace(/\\;/g, ";")
+    .replace(/\\\\/g, "\\")
+    .trim();
+}
+
+function parseIcsDateValue(line) {
+  const rawValue = line.split(":")[1];
+  if (!rawValue) {
+    return null;
+  }
+
+  if (rawValue.endsWith("Z")) {
+    const yyyy = rawValue.slice(0, 4);
+    const mm = rawValue.slice(4, 6);
+    const dd = rawValue.slice(6, 8);
+    const hh = rawValue.slice(9, 11);
+    const mi = rawValue.slice(11, 13);
+    const ss = rawValue.slice(13, 15) || "00";
+    return new Date(`${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}Z`).toISOString();
+  }
+
+  const yyyy = rawValue.slice(0, 4);
+  const mm = rawValue.slice(4, 6);
+  const dd = rawValue.slice(6, 8);
+  const hh = rawValue.slice(9, 11) || "09";
+  const mi = rawValue.slice(11, 13) || "00";
+  const ss = rawValue.slice(13, 15) || "00";
+  return new Date(`${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`).toISOString();
 }
 
 function parseDateTime(input, baseDate) {
@@ -1104,6 +1529,7 @@ function loadState() {
 
   return {
     draft: null,
+    mailImport: null,
     events: [
       {
         id: crypto.randomUUID(),
@@ -1133,7 +1559,7 @@ function loadState() {
 
 function getNextUpcomingEvent() {
   return [...state.events]
-    .filter((event) => event.status !== "done" && new Date(event.startAt) >= new Date())
+    .filter((event) => event.status !== "done" && event.status !== "cancelled" && new Date(event.startAt) >= new Date())
     .sort((a, b) => new Date(a.startAt) - new Date(b.startAt))[0];
 }
 
