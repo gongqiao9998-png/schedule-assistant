@@ -1,5 +1,6 @@
 const net = require("node:net");
 const tls = require("node:tls");
+const { TextDecoder } = require("node:util");
 
 const DEFAULT_TIMEOUT_MS = 12000;
 const CLIENT_IDENTITY = {
@@ -370,10 +371,56 @@ function parseHeaderBlock(block) {
 
       const name = line.slice(0, separator).trim().toLowerCase();
       const value = line.slice(separator + 1).trim();
-      headers[name] = value;
+      headers[name] = decodeMimeHeader(value);
     });
 
   return headers;
+}
+
+function decodeMimeHeader(value) {
+  const input = String(value || "");
+  return input.replace(/=\?([^?]+)\?([bBqQ])\?([^?]*)\?=/g, (_, charset, encoding, text) => {
+    try {
+      const normalizedCharset = normalizeCharset(charset);
+      const bytes =
+        String(encoding).toUpperCase() === "B"
+          ? Buffer.from(text, "base64")
+          : decodeQuotedPrintableToBuffer(text);
+
+      return decodeBytes(bytes, normalizedCharset);
+    } catch (error) {
+      return text;
+    }
+  });
+}
+
+function normalizeCharset(charset) {
+  const lower = String(charset || "utf-8").trim().toLowerCase();
+  if (lower === "utf8") {
+    return "utf-8";
+  }
+
+  if (lower === "gbk" || lower === "gb2312") {
+    return "gb18030";
+  }
+
+  return lower;
+}
+
+function decodeQuotedPrintableToBuffer(text) {
+  const normalized = String(text || "")
+    .replace(/_/g, " ")
+    .replace(/=([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)));
+
+  return Buffer.from(normalized, "binary");
+}
+
+function decodeBytes(bytes, charset) {
+  try {
+    return new TextDecoder(charset).decode(bytes);
+  } catch (error) {
+    return bytes.toString("utf8");
+  }
 }
 
 function makeError(code, message, details) {
