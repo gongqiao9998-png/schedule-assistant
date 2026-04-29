@@ -59,7 +59,7 @@ function extractInviteFromMail(raw) {
       startAt: ics?.startAt || parseDateTimeFromText(textSource),
       endAt: ics?.endAt || null,
       location: meetingMeta.location,
-      organizer: ics?.organizer || parsedMail.from || "",
+      organizer: normalizeOrganizer(ics?.organizer || parsedMail.from || ""),
       meetingLink: meetingMeta.meetingLink,
       meetingDetails: meetingMeta.meetingDetails,
       summary: buildInviteSummary(ics, parsedMail),
@@ -361,11 +361,11 @@ function inferDecision({ method, status, sequence, subject, title, textBody }) {
   }
 
   const signalText = `${subject || ""}\n${title || ""}\n${textBody || ""}`;
-  if (/取消|canceled|cancelled/i.test(signalText)) {
+  if (/取消|撤销|终止|会议取消|canceled|cancelled|withdrawn/i.test(signalText)) {
     return "cancel";
   }
 
-  if (/改期|调整|变更|更新|rescheduled|updated|changed/i.test(signalText)) {
+  if (/改期|调整|变更|更新|延期|顺延|rescheduled|updated|changed|postponed|moved/i.test(signalText)) {
     return "update";
   }
 
@@ -409,7 +409,7 @@ function extractMeetingMeta(text, fallback = {}) {
       : meetingCodeMatch[0]
     : "";
 
-  let location = fallback.location || extractLocation(source) || "";
+  let location = fallback.location || extractLocation(source) || inferMeetingPlatform(meetingLink, source) || "";
   if (location) {
     location = location.replace(/(?:腾讯会议|会议号|Meeting ID)[:：].*$/i, "").trim();
   }
@@ -438,6 +438,9 @@ function extractLocation(input) {
     /地点[:：]\s*([^\n\r]+)/,
     /地址[:：]\s*([^\n\r]+)/,
     /会议地点[:：]\s*([^\n\r]+)/,
+    /参会地点[:：]\s*([^\n\r]+)/,
+    /会议室[:：]\s*([^\n\r]+)/,
+    /会议形式[:：]\s*([^\n\r]+)/,
     /在([\u4e00-\u9fa5A-Za-z0-9·\-/（）() ]{2,30})(?:见面|开会|会面|吃饭|碰头|电话|视频|沟通)/,
   ];
 
@@ -449,6 +452,38 @@ function extractLocation(input) {
   }
 
   return "";
+}
+
+function inferMeetingPlatform(link, source) {
+  const text = `${link || ""}\n${source || ""}`;
+
+  if (/meeting\.tencent\.com|腾讯会议/i.test(text)) {
+    return "腾讯会议";
+  }
+
+  if (/teams\.microsoft\.com|microsoft teams|teams meeting/i.test(text)) {
+    return "Microsoft Teams";
+  }
+
+  if (/zoom\.us|zoom meeting/i.test(text)) {
+    return "Zoom";
+  }
+
+  if (/webex/i.test(text)) {
+    return "Webex";
+  }
+
+  if (/google meet|meet\.google\.com/i.test(text)) {
+    return "Google Meet";
+  }
+
+  return "";
+}
+
+function normalizeOrganizer(value) {
+  const text = String(value || "").trim();
+  const displayName = text.match(/^([^<]+)\s*</)?.[1]?.trim();
+  return displayName || text;
 }
 
 function parseDateTimeFromText(text) {
@@ -489,6 +524,7 @@ function escapeRegExp(input) {
 }
 
 module.exports = {
+  cleanSubject,
   extractInviteFromMail,
   parseRawEmail,
 };
