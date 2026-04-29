@@ -47,9 +47,12 @@ function extractInviteFromMail(raw) {
       decision: inferDecision({
         method: ics?.method,
         status: ics?.status,
+        sequence: ics?.sequence,
         subject: parsedMail.subject,
         textBody: parsedMail.textBody,
       }),
+      calendarUid: ics?.uid || "",
+      sourceMessageId: parsedMail.messageId || "",
       startAt: ics?.startAt || parseDateTimeFromText(textSource),
       endAt: ics?.endAt || null,
       location: meetingMeta.location,
@@ -265,6 +268,8 @@ function parseIcsText(rawText) {
   const result = {
     method: "",
     status: "",
+    uid: "",
+    sequence: 0,
     title: "",
     startAt: null,
     endAt: null,
@@ -277,6 +282,12 @@ function parseIcsText(rawText) {
   unfolded.forEach((line) => {
     if (line.startsWith("METHOD:")) {
       result.method = line.slice(7).trim().toUpperCase();
+    }
+    if (line.startsWith("UID:")) {
+      result.uid = decodeIcsValue(line.slice(4));
+    }
+    if (line.startsWith("SEQUENCE:")) {
+      result.sequence = Number.parseInt(line.slice(9).trim(), 10) || 0;
     }
     if (line.startsWith("SUMMARY:")) {
       result.title = decodeIcsValue(line.slice(8));
@@ -341,7 +352,7 @@ function parseIcsDateValue(line) {
   return new Date(`${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`).toISOString();
 }
 
-function inferDecision({ method, status, subject, textBody }) {
+function inferDecision({ method, status, sequence, subject, textBody }) {
   if (String(method || "").toUpperCase() === "CANCEL" || String(status || "").toUpperCase() === "CANCELLED") {
     return "cancel";
   }
@@ -352,6 +363,10 @@ function inferDecision({ method, status, subject, textBody }) {
   }
 
   if (/改期|调整|rescheduled|updated/i.test(signalText)) {
+    return "update";
+  }
+
+  if (Number(sequence || 0) > 0) {
     return "update";
   }
 

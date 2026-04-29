@@ -1154,6 +1154,8 @@ function buildMailImportFromMailboxItem(item, parsedPayload) {
     organizer: parsedInvite?.organizer || item.from || "当前邮箱",
     meetingLink: parsedInvite?.meetingLink || "",
     meetingDetails: parsedInvite?.meetingDetails || parsedInvite?.meetingLink || "",
+    calendarUid: parsedInvite?.calendarUid || "",
+    sourceMessageId: parsedInvite?.sourceMessageId || item.messageId || "",
     reminderTitle: `会前确认${title || "邮件会议"}资料`,
     todoTitle: `准备${title || "邮件会议"}会前资料`,
     source: "mailbox-api",
@@ -1207,6 +1209,8 @@ function buildMailImportFromText(rawText) {
     organizer: extractParticipants(rawText) || "转发邮件发起人",
     meetingLink: extractMeetingLink(rawText),
     meetingDetails: extractMeetingDetails(rawText),
+    calendarUid: "",
+    sourceMessageId: "",
     reminderTitle: `会前确认${title}资料`,
     todoTitle: `准备${title}会前资料`,
     source: "pasted-mail",
@@ -1215,17 +1219,22 @@ function buildMailImportFromText(rawText) {
 
 function buildMailImportFromIcs(rawText, filename) {
   const parsed = parseIcsText(rawText);
+  const isCancel = parsed.method === "CANCEL" || parsed.status === "CANCELLED";
+  const isUpdate = !isCancel && Number(parsed.sequence || 0) > 0;
 
   return {
     title: parsed.title || filename || "ICS 会议导入",
-    decision: parsed.method === "CANCEL" || parsed.status === "CANCELLED" ? "cancel" : "create",
-    decisionLabel:
-      parsed.method === "CANCEL" || parsed.status === "CANCELLED"
-        ? "助理判断：会议取消"
+    decision: isCancel ? "cancel" : isUpdate ? "update" : "create",
+    decisionLabel: isCancel
+      ? "助理判断：会议取消"
+      : isUpdate
+        ? "助理判断：会议改期 / 更新"
         : "助理判断：新增会议",
     summary:
-      parsed.method === "CANCEL" || parsed.status === "CANCELLED"
+      isCancel
         ? "这是来自日历附件的取消通知，确认后会把对应会议标记为取消。"
+        : isUpdate
+          ? "这是来自日历附件的更新通知，确认后会刷新原会议时间与提醒。"
         : "助理已从 .ics 中识别出会议标题、时间和地点，可直接写入工作台。",
     startAt: parsed.startAt,
     endAt: parsed.endAt,
@@ -1233,6 +1242,8 @@ function buildMailImportFromIcs(rawText, filename) {
     organizer: parsed.organizer || "ICS 组织者",
     meetingLink: parsed.meetingLink,
     meetingDetails: parsed.meetingDetails || parsed.meetingLink,
+    calendarUid: parsed.uid || "",
+    sourceMessageId: "",
     reminderTitle: `会前确认${parsed.title || "会议"}资料`,
     todoTitle: `准备${parsed.title || "会议"}会前资料`,
     source: "ics-upload",
@@ -1245,12 +1256,18 @@ function confirmMailImport() {
     return;
   }
 
+  item.importKey = buildMailImportKey(item);
+  const existing = findExistingImportedEvent(item);
+
   if (item.decision === "cancel") {
-    const existing = state.events.find((event) => event.title.includes(item.title) || item.title.includes(event.title));
     if (existing) {
       existing.status = "cancelled";
+      existing.mailImportKey = item.importKey || existing.mailImportKey || "";
+      existing.sourceMessageId = item.sourceMessageId || existing.sourceMessageId || "";
+      existing.calendarUid = item.calendarUid || existing.calendarUid || "";
       existing.notes = "由转发邮件导入流程标记为已取消";
     }
+    cancelRelatedActionItems(existing?.id, item.importKey);
     state.mailImport = null;
     saveState();
     render();
@@ -1261,19 +1278,24 @@ function confirmMailImport() {
   const startAt = item.startAt ? new Date(item.startAt) : getNextBusinessSlot(1, 15, 0);
   const endAt = item.endAt ? new Date(item.endAt) : new Date(startAt.getTime() + 60 * 60 * 1000);
 
-  if (item.decision === "update") {
-    const existing = state.events.find((event) => event.title.includes(item.title) || item.title.includes(event.title));
-    if (existing) {
-      existing.title = item.title;
-      existing.startAt = startAt.toISOString();
-      existing.endAt = endAt.toISOString();
-      existing.location = item.location || existing.location;
-      existing.meetingLink = item.meetingLink || existing.meetingLink || "";
-      existing.meetingDetails = item.meetingDetails || existing.meetingDetails || "";
-      existing.notes = "由转发邮件导入流程更新";
-    }
+  let targetEvent = existing || null;
+
+  if (targetEvent) {
+    targetEvent.title = item.title;
+    targetEvent.startAt = startAt.toISOString();
+    targetEvent.endAt = endAt.toISOString();
+    targetEvent.location = item.location || targetEvent.location;
+    targetEvent.participants = item.organizer || targetEvent.participants || "邮件组织者";
+    targetEvent.meetingLink = item.meetingLink || targetEvent.meetingLink || "";
+    targetEvent.meetingDetails = item.meetingDetails || targetEvent.meetingDetails || "";
+    targetEvent.mailImportKey = item.importKey || targetEvent.mailImportKey || "";
+    targetEvent.sourceMessageId = item.sourceMessageId || targetEvent.sourceMessageId || "";
+    targetEvent.calendarUid = item.calendarUid || targetEvent.calendarUid || "";
+    targetEvent.status = "scheduled";
+    targetEvent.notes =
+      item.decision === "update" ? "由转发邮件导入流程更新" : "由转发邮件导入流程同步到现有会议";
   } else {
-    state.events.unshift({
+    targetEvent = {
       id: crypto.randomUUID(),
       title: item.title,
       startAt: startAt.toISOString(),
@@ -1282,36 +1304,171 @@ function confirmMailImport() {
       participants: item.organizer || "邮件组织者",
       meetingLink: item.meetingLink || "",
       meetingDetails: item.meetingDetails || item.meetingLink || "",
+      mailImportKey: item.importKey || "",
+      sourceMessageId: item.sourceMessageId || "",
+      calendarUid: item.calendarUid || "",
       notes: "来自转发邮件导入",
       status: "scheduled",
-    });
+    };
+    state.events.unshift(targetEvent);
   }
 
-  state.reminders.unshift({
-    id: crypto.randomUUID(),
-    kind: "reminder",
-    title: item.reminderTitle,
-    remindAt: new Date(startAt.getTime() - 30 * 60 * 1000).toISOString(),
-    note: "由转发邮件导入自动生成",
-    source: item.source,
-    status: "pending",
-  });
-
-  state.reminders.unshift({
-    id: crypto.randomUUID(),
-    kind: "todo",
-    title: item.todoTitle,
-    dueAt: new Date(startAt.getTime() - 60 * 60 * 1000).toISOString(),
-    note: "由转发邮件导入自动生成",
-    source: item.source,
-    status: "pending",
-  });
+  upsertMailImportActionItems(targetEvent.id, item, startAt);
 
   state.mailImport = null;
   saveState();
   render();
   scheduleReminderNotifications();
-  ui.voiceStatus.textContent = "邮件邀请已写入助理工作台";
+  ui.voiceStatus.textContent = existing
+    ? item.decision === "update"
+      ? "邮件邀请已更新到助理工作台"
+      : "已跳过重复导入，并同步到现有会议"
+    : "邮件邀请已写入助理工作台";
+}
+
+function buildMailImportKey(item) {
+  if (item.calendarUid) {
+    return `calendar:${item.calendarUid}`;
+  }
+
+  if (item.sourceMessageId) {
+    return `message:${item.sourceMessageId}`;
+  }
+
+  const titleKey = normalizeImportTitle(item.title);
+  const startKey = item.startAt ? new Date(item.startAt).toISOString().slice(0, 16) : "na";
+  return `fallback:${titleKey}:${startKey}`;
+}
+
+function normalizeImportTitle(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^转发[:：]\s*/i, "")
+    .replace(/\s+/g, " ");
+}
+
+function findExistingImportedEvent(item) {
+  const titleKey = normalizeImportTitle(item.title);
+
+  if (item.calendarUid) {
+    const byCalendar = state.events.find((event) => event.calendarUid && event.calendarUid === item.calendarUid);
+    if (byCalendar) {
+      return byCalendar;
+    }
+  }
+
+  if (item.sourceMessageId) {
+    const byMessage = state.events.find(
+      (event) => event.sourceMessageId && event.sourceMessageId === item.sourceMessageId
+    );
+    if (byMessage) {
+      return byMessage;
+    }
+  }
+
+  if (item.importKey) {
+    const byImportKey = state.events.find((event) => event.mailImportKey && event.mailImportKey === item.importKey);
+    if (byImportKey) {
+      return byImportKey;
+    }
+  }
+
+  return state.events.find((event) => {
+    if (normalizeImportTitle(event.title) !== titleKey) {
+      return false;
+    }
+
+    const sameOrganizer =
+      !item.organizer ||
+      !event.participants ||
+      String(event.participants).includes(item.organizer) ||
+      String(item.organizer).includes(event.participants);
+
+    const eventStart = event.startAt ? new Date(event.startAt).getTime() : NaN;
+    const itemStart = item.startAt ? new Date(item.startAt).getTime() : NaN;
+    const timeDistance = Number.isFinite(eventStart) && Number.isFinite(itemStart)
+      ? Math.abs(eventStart - itemStart)
+      : Number.POSITIVE_INFINITY;
+
+    return sameOrganizer && timeDistance <= 3 * 24 * 60 * 60 * 1000;
+  });
+}
+
+function upsertMailImportActionItems(eventId, item, startAt) {
+  const reminderAt = new Date(startAt.getTime() - 30 * 60 * 1000).toISOString();
+  const todoDueAt = new Date(startAt.getTime() - 60 * 60 * 1000).toISOString();
+
+  upsertMailImportActionItem({
+    eventId,
+    importKey: item.importKey,
+    kind: "reminder",
+    title: item.reminderTitle,
+    remindAt: reminderAt,
+    note: "由转发邮件导入自动生成",
+    source: item.source,
+  });
+
+  upsertMailImportActionItem({
+    eventId,
+    importKey: item.importKey,
+    kind: "todo",
+    title: item.todoTitle,
+    dueAt: todoDueAt,
+    note: "由转发邮件导入自动生成",
+    source: item.source,
+  });
+}
+
+function upsertMailImportActionItem(payload) {
+  const existing = state.reminders.find((entry) => {
+    if (entry.kind !== payload.kind) {
+      return false;
+    }
+    if (entry.eventId && payload.eventId && entry.eventId === payload.eventId) {
+      return true;
+    }
+    return entry.mailImportKey && payload.importKey && entry.mailImportKey === payload.importKey;
+  });
+
+  if (existing) {
+    existing.title = payload.title;
+    existing.note = payload.note;
+    existing.source = payload.source;
+    existing.status = "pending";
+    existing.eventId = payload.eventId;
+    existing.mailImportKey = payload.importKey || existing.mailImportKey || "";
+    if (payload.kind === "todo") {
+      existing.dueAt = payload.dueAt;
+    } else {
+      existing.remindAt = payload.remindAt;
+    }
+    return;
+  }
+
+  state.reminders.unshift({
+    id: crypto.randomUUID(),
+    kind: payload.kind,
+    title: payload.title,
+    remindAt: payload.remindAt,
+    dueAt: payload.dueAt,
+    note: payload.note,
+    source: payload.source,
+    status: "pending",
+    eventId: payload.eventId,
+    mailImportKey: payload.importKey || "",
+  });
+}
+
+function cancelRelatedActionItems(eventId, importKey) {
+  state.reminders.forEach((entry) => {
+    const sameEvent = eventId && entry.eventId === eventId;
+    const sameImport = importKey && entry.mailImportKey === importKey;
+
+    if (sameEvent || sameImport) {
+      entry.status = "cancelled";
+    }
+  });
 }
 
 function buildEventTitle(input) {
@@ -1493,6 +1650,8 @@ function parseIcsText(rawText) {
   const result = {
     method: "",
     status: "",
+    uid: "",
+    sequence: 0,
     title: "",
     startAt: null,
     endAt: null,
@@ -1505,6 +1664,12 @@ function parseIcsText(rawText) {
   unfolded.forEach((line) => {
     if (line.startsWith("METHOD:")) {
       result.method = line.slice(7).trim().toUpperCase();
+    }
+    if (line.startsWith("UID:")) {
+      result.uid = decodeIcsValue(line.slice(4));
+    }
+    if (line.startsWith("SEQUENCE:")) {
+      result.sequence = Number.parseInt(line.slice(9).trim(), 10) || 0;
     }
     if (line.startsWith("SUMMARY:")) {
       result.title = decodeIcsValue(line.slice(8));
