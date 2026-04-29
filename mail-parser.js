@@ -35,6 +35,8 @@ function extractInviteFromMail(raw) {
   const calendarText = parsedMail.calendarParts[0]?.content || "";
   const ics = calendarText ? parseIcsText(calendarText) : null;
   const textSource = parsedMail.textBody || stripHtml(parsedMail.htmlBody) || "";
+  const subjectTitle = cleanSubject(parsedMail.subject);
+  const normalizedIcsTitle = cleanSubject(ics?.title || "");
   const meetingMeta = extractMeetingMeta(textSource, {
     location: ics?.location,
     meetingLink: ics?.meetingLink,
@@ -43,12 +45,13 @@ function extractInviteFromMail(raw) {
   return {
     mail: parsedMail,
     invite: {
-      title: ics?.title || cleanSubject(parsedMail.subject),
+      title: normalizedIcsTitle || subjectTitle,
       decision: inferDecision({
         method: ics?.method,
         status: ics?.status,
         sequence: ics?.sequence,
         subject: parsedMail.subject,
+        title: normalizedIcsTitle || subjectTitle,
         textBody: parsedMail.textBody,
       }),
       calendarUid: ics?.uid || "",
@@ -352,12 +355,12 @@ function parseIcsDateValue(line) {
   return new Date(`${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}`).toISOString();
 }
 
-function inferDecision({ method, status, sequence, subject, textBody }) {
+function inferDecision({ method, status, sequence, subject, title, textBody }) {
   if (String(method || "").toUpperCase() === "CANCEL" || String(status || "").toUpperCase() === "CANCELLED") {
     return "cancel";
   }
 
-  const signalText = `${subject || ""}\n${textBody || ""}`;
+  const signalText = `${subject || ""}\n${title || ""}\n${textBody || ""}`;
   if (/取消|canceled|cancelled/i.test(signalText)) {
     return "cancel";
   }
