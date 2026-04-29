@@ -1343,8 +1343,10 @@ function buildMailImportKey(item) {
 function normalizeImportTitle(value) {
   return String(value || "")
     .trim()
+    .replace(/^\s*取消[:：]\s*/i, "")
     .toLowerCase()
     .replace(/^转发[:：]\s*/i, "")
+    .replace(/\s*(改期|调整|变更|更新)(通知)?\s*$/i, "")
     .replace(/\s+/g, " ");
 }
 

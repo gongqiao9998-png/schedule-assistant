@@ -362,7 +362,7 @@ function inferDecision({ method, status, sequence, subject, textBody }) {
     return "cancel";
   }
 
-  if (/改期|调整|rescheduled|updated/i.test(signalText)) {
+  if (/改期|调整|变更|更新|rescheduled|updated|changed/i.test(signalText)) {
     return "update";
   }
 
@@ -386,7 +386,10 @@ function buildInviteSummary(ics, parsedMail) {
 function cleanSubject(subject) {
   return String(subject || "")
     .replace(/^\s*\[助理\]\s*/i, "")
+    .replace(/^\s*取消[:：]\s*/i, "")
     .replace(/^转发[:：]\s*/i, "")
+    .replace(/\s*(改期|调整|变更|更新)(通知)?\s*$/i, "")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
