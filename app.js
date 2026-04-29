@@ -1334,6 +1334,22 @@ function scrollToMailboxSettings() {
   });
 }
 
+function scrollToMailImport() {
+  const section =
+    document.querySelector("#mailImportSection") ||
+    ui.mailImportStatus?.closest("section") ||
+    ui.mailImportStatus;
+
+  if (!section) {
+    return;
+  }
+
+  section.scrollIntoView({
+    behavior: "smooth",
+    block: "start",
+  });
+}
+
 function buildMailImportFromText(rawText) {
   const startDate = parseDateTime(rawText, new Date());
   const endDate = startDate ? new Date(startDate.getTime() + 60 * 60 * 1000) : null;
