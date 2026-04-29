@@ -1437,7 +1437,7 @@ function confirmMailImport() {
     cancelRelatedActionItems(existing?.id, item.importKey);
     advanceMailImportQueue(true);
     render();
-    ui.voiceStatus.textContent = "已按邮件内容处理会议取消";
+    continueMailImportAfterAction("已按邮件内容处理会议取消");
     return;
   }
 
@@ -1484,11 +1484,23 @@ function confirmMailImport() {
   advanceMailImportQueue(true);
   render();
   scheduleReminderNotifications();
-  ui.voiceStatus.textContent = existing
+  continueMailImportAfterAction(existing
     ? item.decision === "update"
       ? "邮件邀请已更新到助理工作台"
       : "已跳过重复导入，并同步到现有会议"
-    : "邮件邀请已写入助理工作台";
+    : "邮件邀请已写入助理工作台");
+}
+
+function continueMailImportAfterAction(baseMessage) {
+  const importState = state.mailImport;
+  if (importState?.mode === "parsed" && Array.isArray(importState.items) && importState.items.length) {
+    const currentIndex = Math.min((importState.currentIndex || 0) + 1, importState.items.length);
+    ui.voiceStatus.textContent = `${baseMessage}，已切换到第 ${currentIndex} / 共 ${importState.items.length} 封待处理邮件`;
+    scrollToMailImport();
+    return;
+  }
+
+  ui.voiceStatus.textContent = baseMessage;
 }
 
 function buildMailImportKey(item) {
