@@ -15,9 +15,10 @@ module.exports = async function handler(req, res) {
       item,
       parsed: item.raw ? extractInviteFromMail(item.raw) : null,
     }));
-    const selected = selectBestMailCandidate(candidates, body.subjectTag || "[助理]");
+    const rankedItems = buildRankedMailCandidates(candidates, body.subjectTag || "[助理]");
+    const selected = rankedItems[0] || null;
     const item = selected?.item || null;
-    const parsed = selected ? applySelectionHints(selected) : null;
+    const parsed = selected?.parsed || null;
 
     sendJson(res, 200, {
       success: true,
@@ -25,7 +26,11 @@ module.exports = async function handler(req, res) {
       item,
       parsed,
       count: result.count || 0,
-      candidates: candidates.map((candidate) => ({
+      items: rankedItems.map((candidate) => ({
+        item: candidate.item,
+        parsed: candidate.parsed,
+      })),
+      candidates: rankedItems.map((candidate) => ({
         subject: candidate.item.subject,
         date: candidate.item.date,
         messageId: candidate.item.messageId,
@@ -47,9 +52,9 @@ module.exports = async function handler(req, res) {
   }
 };
 
-function selectBestMailCandidate(candidates, subjectTag) {
+function buildRankedMailCandidates(candidates, subjectTag) {
   if (!candidates.length) {
-    return null;
+    return [];
   }
 
   const groups = new Map();
@@ -62,16 +67,17 @@ function selectBestMailCandidate(candidates, subjectTag) {
   });
 
   const rankedGroups = Array.from(groups.values()).sort(compareGroups);
-  const bestGroup = rankedGroups[0] || [];
-  const bestCandidate = [...bestGroup].sort(compareCandidates)[0] || null;
-  if (!bestCandidate) {
-    return null;
-  }
-
-  return {
-    ...bestCandidate,
-    siblingCount: bestGroup.length,
-  };
+  return rankedGroups.flatMap((group) =>
+    [...group]
+      .sort(compareCandidates)
+      .map((candidate) => ({
+        item: candidate.item,
+        parsed: applySelectionHints({
+          ...candidate,
+          siblingCount: group.length,
+        }),
+      }))
+  );
 }
 
 function normalizeCandidateTitle(candidate, subjectTag) {

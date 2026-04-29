@@ -122,6 +122,10 @@ function bindEvents() {
       confirmMailImport();
     }
 
+    if (action === "mail-import-next") {
+      advanceMailImportQueue();
+    }
+
     if (action === "dismiss-mail-import") {
       state.mailImport = null;
       saveState();
@@ -464,9 +468,15 @@ function renderMailImport() {
   }
 
   if (importState.mode === "parsed") {
-    const item = importState.item;
+    const item = getCurrentMailImportItem(importState);
+    const totalCount = importState.items?.length || (item ? 1 : 0);
+    const queueLabel =
+      totalCount > 1
+        ? `<div class="mail-queue-note">当前第 ${Math.min((importState.currentIndex || 0) + 1, totalCount)} / ${totalCount} 封待处理邮件</div>`
+        : "";
     ui.mailImportStatus.className = "mail-import-result";
     ui.mailImportStatus.innerHTML = `
+      ${queueLabel}
       <div class="mail-decision">
         <span class="type-pill">${escapeHtml(item.decisionLabel)}</span>
         <h3>${escapeHtml(item.title)}</h3>
@@ -496,6 +506,7 @@ function renderMailImport() {
       </div>
       <div class="capture-actions">
         <button class="primary-button" type="button" data-action="confirm-mail-import">确认导入工作台</button>
+        ${totalCount > 1 ? '<button class="secondary-button" type="button" data-action="mail-import-next">下一封待处理</button>' : ""}
         <button class="ghost-button" type="button" data-action="dismiss-mail-import">稍后处理</button>
       </div>
     `;
@@ -869,20 +880,27 @@ function openMailboxSettings() {
 async function simulateForwardedMailRecognition() {
   if (state.mailboxSettings?.email && state.mailboxSettings?.username && state.mailboxSettings?.password) {
     try {
-      ui.voiceStatus.textContent = "正在检查最近一封 [助理] 邮件";
+      ui.voiceStatus.textContent = "正在检查最近几封 [助理] 邮件";
       const response = await callMailboxApi("/api/mail/check-latest", {
         ...state.mailboxSettings,
         limit: 20,
       });
 
-      if (response.found && response.item) {
+      if (response.found && (response.items?.length || response.item)) {
+        const mailItems = (response.items || [])
+          .map((entry) => buildMailImportFromMailboxItem(entry.item, entry.parsed))
+          .filter(Boolean);
+        const fallbackItem = response.item ? buildMailImportFromMailboxItem(response.item, response.parsed) : null;
+        const queue = mailItems.length ? mailItems : fallbackItem ? [fallbackItem] : [];
         state.mailImport = {
           mode: "parsed",
-          item: buildMailImportFromMailboxItem(response.item, response.parsed),
+          items: queue,
+          currentIndex: 0,
+          item: queue[0] || null,
         };
         saveState();
         renderMailImport();
-        ui.voiceStatus.textContent = "已从邮箱找到最近一封 [助理] 邮件";
+        ui.voiceStatus.textContent = `已从邮箱找到 ${queue.length} 封待处理 [助理] 邮件`;
         return;
       }
 
@@ -1172,6 +1190,55 @@ function buildMailImportFromMailboxItem(item, parsedPayload) {
   };
 }
 
+function getCurrentMailImportItem(importState = state.mailImport) {
+  if (!importState) {
+    return null;
+  }
+
+  if (Array.isArray(importState.items) && importState.items.length) {
+    return importState.items[importState.currentIndex || 0] || importState.items[0];
+  }
+
+  return importState.item || null;
+}
+
+function advanceMailImportQueue(removeCurrent = false) {
+  const importState = state.mailImport;
+  if (!importState || importState.mode !== "parsed" || !Array.isArray(importState.items) || !importState.items.length) {
+    state.mailImport = null;
+    saveState();
+    renderMailImport();
+    return;
+  }
+
+  let nextItems = [...importState.items];
+  let nextIndex = importState.currentIndex || 0;
+
+  if (removeCurrent) {
+    nextItems.splice(nextIndex, 1);
+    if (!nextItems.length) {
+      state.mailImport = null;
+      saveState();
+      renderMailImport();
+      return;
+    }
+    if (nextIndex >= nextItems.length) {
+      nextIndex = 0;
+    }
+  } else {
+    nextIndex = (nextIndex + 1) % nextItems.length;
+  }
+
+  state.mailImport = {
+    ...importState,
+    items: nextItems,
+    currentIndex: nextIndex,
+    item: nextItems[nextIndex] || null,
+  };
+  saveState();
+  renderMailImport();
+}
+
 function cleanImportedMailTitle(value, subjectTag = "[助理]") {
   return String(value || "")
     .replace(subjectTag, "")
@@ -1292,7 +1359,7 @@ function buildMailImportFromIcs(rawText, filename) {
 }
 
 function confirmMailImport() {
-  const item = state.mailImport?.item;
+  const item = getCurrentMailImportItem();
   if (!item) {
     return;
   }
@@ -1309,8 +1376,7 @@ function confirmMailImport() {
       existing.notes = "由转发邮件导入流程标记为已取消";
     }
     cancelRelatedActionItems(existing?.id, item.importKey);
-    state.mailImport = null;
-    saveState();
+    advanceMailImportQueue(true);
     render();
     ui.voiceStatus.textContent = "已按邮件内容处理会议取消";
     return;
@@ -1356,8 +1422,7 @@ function confirmMailImport() {
 
   upsertMailImportActionItems(targetEvent.id, item, startAt);
 
-  state.mailImport = null;
-  saveState();
+  advanceMailImportQueue(true);
   render();
   scheduleReminderNotifications();
   ui.voiceStatus.textContent = existing

@@ -409,10 +409,11 @@ function extractMeetingMeta(text, fallback = {}) {
       : meetingCodeMatch[0]
     : "";
 
-  let location = fallback.location || extractLocation(source) || inferMeetingPlatform(meetingLink, source) || "";
+  let location = sanitizeLocation(fallback.location) || extractLocation(source) || inferMeetingPlatform(meetingLink, source) || "";
   if (location) {
     location = location.replace(/(?:腾讯会议|会议号|Meeting ID)[:：].*$/i, "").trim();
   }
+  location = sanitizeLocation(location) || inferMeetingPlatform(meetingLink, source) || "";
 
   const tencentLine = source.match(/([^\n\r]*腾讯会议[^\n\r]*)/i)?.[1]?.trim() || "";
   const meetingDetails = [meetingLink, tencentLine || (meetingCode ? `会议号：${meetingCode}` : "")]
@@ -447,11 +448,45 @@ function extractLocation(input) {
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match) {
-      return match[1].trim();
+      const cleaned = sanitizeLocation(match[1]);
+      if (cleaned) {
+        return cleaned;
+      }
     }
   }
 
   return "";
+}
+
+function sanitizeLocation(value) {
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) {
+    return "";
+  }
+
+  if (/^(dear|hi|hello)\b/i.test(text)) {
+    return "";
+  }
+
+  if (/原始约会|original appointment|原始会议/i.test(text)) {
+    return "";
+  }
+
+  if (/^[—\-_=~\s]+$/.test(text)) {
+    return "";
+  }
+
+  if (/^(dear all|hi all|hello all)[,，]?$/i.test(text)) {
+    return "";
+  }
+
+  return text
+    .replace(/^[—\-_=~\s]+/, "")
+    .replace(/[—\-_=~\s]+$/, "")
+    .trim();
 }
 
 function inferMeetingPlatform(link, source) {
