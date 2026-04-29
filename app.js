@@ -482,12 +482,16 @@ function renderMailImport() {
           <strong>${escapeHtml(item.endAt ? formatDateTime(item.endAt) : "默认 1 小时后")}</strong>
         </article>
         <article class="mail-detail-item">
-          <span>地点 / 链接</span>
-          <strong>${escapeHtml(item.location || item.meetingLink || "待补充")}</strong>
+          <span>地点</span>
+          <strong>${escapeHtml(item.location || "待补充")}</strong>
         </article>
         <article class="mail-detail-item">
           <span>组织者</span>
           <strong>${escapeHtml(item.organizer || "邮件发起人待识别")}</strong>
+        </article>
+        <article class="mail-detail-item">
+          <span>会议链接 / 会议号</span>
+          <strong>${escapeHtml(item.meetingDetails || item.meetingLink || "待补充")}</strong>
         </article>
       </div>
       <div class="capture-actions">
@@ -580,7 +584,7 @@ function renderAgenda() {
           </div>
           <p>${escapeHtml(event.location || "地点待定")} · ${escapeHtml(event.participants || "参与人待补充")}</p>
           <div class="list-item__footer">
-            <span>${escapeHtml(event.notes || "由助理根据输入自动整理")}</span>
+            <span>${escapeHtml(buildEventFooterNote(event))}</span>
             ${
               event.status === "cancelled"
                 ? '<button class="small-button" type="button" disabled>已取消</button>'
@@ -1146,9 +1150,10 @@ function buildMailImportFromMailboxItem(item, parsedPayload) {
       "后端已找到一封带指定标识的邮件，并完成了第一轮正文 / 日历附件解析。",
     startAt,
     endAt,
-    location: parsedInvite?.location || parsedInvite?.meetingLink || "待从邮件正文 / .ics 解析",
+    location: parsedInvite?.location || "待从邮件正文 / .ics 解析",
     organizer: parsedInvite?.organizer || item.from || "当前邮箱",
     meetingLink: parsedInvite?.meetingLink || "",
+    meetingDetails: parsedInvite?.meetingDetails || parsedInvite?.meetingLink || "",
     reminderTitle: `会前确认${title || "邮件会议"}资料`,
     todoTitle: `准备${title || "邮件会议"}会前资料`,
     source: "mailbox-api",
@@ -1201,6 +1206,7 @@ function buildMailImportFromText(rawText) {
     location: extractLocation(rawText),
     organizer: extractParticipants(rawText) || "转发邮件发起人",
     meetingLink: extractMeetingLink(rawText),
+    meetingDetails: extractMeetingDetails(rawText),
     reminderTitle: `会前确认${title}资料`,
     todoTitle: `准备${title}会前资料`,
     source: "pasted-mail",
@@ -1226,6 +1232,7 @@ function buildMailImportFromIcs(rawText, filename) {
     location: parsed.location,
     organizer: parsed.organizer || "ICS 组织者",
     meetingLink: parsed.meetingLink,
+    meetingDetails: parsed.meetingDetails || parsed.meetingLink,
     reminderTitle: `会前确认${parsed.title || "会议"}资料`,
     todoTitle: `准备${parsed.title || "会议"}会前资料`,
     source: "ics-upload",
@@ -1261,6 +1268,8 @@ function confirmMailImport() {
       existing.startAt = startAt.toISOString();
       existing.endAt = endAt.toISOString();
       existing.location = item.location || existing.location;
+      existing.meetingLink = item.meetingLink || existing.meetingLink || "";
+      existing.meetingDetails = item.meetingDetails || existing.meetingDetails || "";
       existing.notes = "由转发邮件导入流程更新";
     }
   } else {
@@ -1269,8 +1278,10 @@ function confirmMailImport() {
       title: item.title,
       startAt: startAt.toISOString(),
       endAt: endAt.toISOString(),
-      location: item.location || item.meetingLink || "邮件邀请待补充地点",
+      location: item.location || "邮件邀请待补充地点",
       participants: item.organizer || "邮件组织者",
+      meetingLink: item.meetingLink || "",
+      meetingDetails: item.meetingDetails || item.meetingLink || "",
       notes: "来自转发邮件导入",
       status: "scheduled",
     });
@@ -1463,6 +1474,12 @@ function extractMeetingLink(text) {
   return match ? match[0] : "";
 }
 
+function extractMeetingDetails(text) {
+  const link = extractMeetingLink(text);
+  const line = text.match(/([^\n\r]*(腾讯会议|会议号|Meeting ID)[^\n\r]*)/i)?.[1]?.trim() || "";
+  return link || line;
+}
+
 function parseIcsText(rawText) {
   const unfolded = rawText.replace(/\r\n/g, "\n").split("\n").reduce((acc, line) => {
     if (/^[ \t]/.test(line) && acc.length) {
@@ -1482,6 +1499,7 @@ function parseIcsText(rawText) {
     location: "",
     organizer: "",
     meetingLink: "",
+    meetingDetails: "",
   };
 
   unfolded.forEach((line) => {
@@ -1498,7 +1516,9 @@ function parseIcsText(rawText) {
       result.location = decodeIcsValue(line.slice(9));
     }
     if (line.startsWith("DESCRIPTION:")) {
-      result.meetingLink = extractMeetingLink(decodeIcsValue(line.slice(12)));
+      const description = decodeIcsValue(line.slice(12));
+      result.meetingLink = extractMeetingLink(description);
+      result.meetingDetails = extractMeetingDetails(description);
     }
     if (line.startsWith("ORGANIZER")) {
       result.organizer = line.includes("CN=")
@@ -1514,6 +1534,19 @@ function parseIcsText(rawText) {
   });
 
   return result;
+}
+
+function buildEventFooterNote(event) {
+  const parts = [];
+
+  if (event.meetingDetails) {
+    parts.push(event.meetingDetails);
+  } else if (event.meetingLink) {
+    parts.push(event.meetingLink);
+  }
+
+  parts.push(event.notes || "由助理根据输入自动整理");
+  return parts.filter(Boolean).join(" · ");
 }
 
 function decodeIcsValue(value) {
