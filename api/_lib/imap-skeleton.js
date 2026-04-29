@@ -196,6 +196,17 @@ class SimpleImapSession {
     };
   }
 
+  async fetchRawMessage(sequence) {
+    const response = await this.sendCommand(`FETCH ${sequence} (UID BODY.PEEK[])`, 20000);
+    const literalBlock = extractLiteralBlock(response);
+    const uidMatch = response.match(/\bUID (\d+)\b/i);
+
+    return {
+      uid: uidMatch ? uidMatch[1] : String(sequence),
+      raw: literalBlock,
+    };
+  }
+
   async logout() {
     try {
       await this.sendCommand("LOGOUT", 4000);
@@ -340,6 +351,57 @@ async function listTaggedMails(input, limit = 20) {
   }
 }
 
+async function inspectLatestTaggedMail(input, limit = 20) {
+  const { config, errors } = validateMailboxConfig(input);
+  if (errors.length) {
+    throw makeError("INVALID_MAILBOX_CONFIG", errors.join(" "));
+  }
+
+  const session = await SimpleImapSession.connect(config);
+
+  try {
+    await session.login(config.username, config.password);
+    await session.identifyClient();
+    await session.selectMailbox(config.folder);
+
+    const allSequences = await session.searchAll();
+    const latestSequences = allSequences.slice(-Math.max(limit, 1)).reverse();
+
+    for (const sequence of latestSequences) {
+      const headers = await session.fetchHeaders(sequence);
+      if (!(headers.subject || "").includes(config.subjectTag)) {
+        continue;
+      }
+
+      const rawMessage = await session.fetchRawMessage(sequence);
+      return {
+        success: true,
+        folder: config.folder,
+        subjectTag: config.subjectTag,
+        item: {
+          uid: rawMessage.uid,
+          sequence: headers.sequence,
+          subject: headers.subject,
+          from: headers.from,
+          date: headers.date,
+          messageId: headers.messageId,
+          subjectTag: config.subjectTag,
+          raw: rawMessage.raw,
+        },
+      };
+    }
+
+    return {
+      success: true,
+      folder: config.folder,
+      subjectTag: config.subjectTag,
+      item: null,
+    };
+  } finally {
+    await session.logout();
+  }
+}
+
 function quoteImap(value) {
   return `"${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
@@ -433,6 +495,8 @@ function makeError(code, message, details) {
 }
 
 module.exports = {
+  decodeMimeHeader,
+  inspectLatestTaggedMail,
   listTaggedMails,
   testMailboxConnection,
   validateMailboxConfig,

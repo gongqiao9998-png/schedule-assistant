@@ -1,5 +1,6 @@
 const { readJson, sendError, sendJson } = require("../_lib/http");
-const { listTaggedMails } = require("../_lib/imap-skeleton");
+const { inspectLatestTaggedMail } = require("../_lib/imap-skeleton");
+const { extractInviteFromMail } = require("../_lib/mail-parser");
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
@@ -9,14 +10,16 @@ module.exports = async function handler(req, res) {
 
   try {
     const body = await readJson(req);
-    const result = await listTaggedMails(body, Number(body.limit || 20));
-    const item = result.items[0] || null;
+    const result = await inspectLatestTaggedMail(body, Number(body.limit || 20));
+    const item = result.item || null;
+    const parsed = item?.raw ? extractInviteFromMail(item.raw) : null;
 
     sendJson(res, 200, {
       success: true,
       found: Boolean(item),
       item,
-      count: result.count,
+      parsed,
+      count: item ? 1 : 0,
       folder: result.folder,
       subjectTag: result.subjectTag,
     });

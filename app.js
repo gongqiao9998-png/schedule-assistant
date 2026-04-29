@@ -874,7 +874,7 @@ async function simulateForwardedMailRecognition() {
       if (response.found && response.item) {
         state.mailImport = {
           mode: "parsed",
-          item: buildMailImportFromMailboxItem(response.item),
+          item: buildMailImportFromMailboxItem(response.item, response.parsed),
         };
         saveState();
         renderMailImport();
@@ -1120,23 +1120,37 @@ function buildTaggedMailResultMessage(response, form) {
   return `已找到 ${response.count} 封 ${form.subjectTag} 邮件。${latestSummary}`.trim();
 }
 
-function buildMailImportFromMailboxItem(item) {
-  const startAt = getNextBusinessSlot(1, 16, 0);
-  const endAt = new Date(startAt.getTime() + 60 * 60 * 1000);
+function buildMailImportFromMailboxItem(item, parsedPayload) {
+  const parsedInvite = parsedPayload?.invite;
+  const fallbackStart = getNextBusinessSlot(1, 16, 0);
+  const fallbackEnd = new Date(fallbackStart.getTime() + 60 * 60 * 1000);
   const cleanedSubject = (item.subject || "最近转发邮件").replace(item.subjectTag || "[助理]", "").trim();
+  const decision = parsedInvite?.decision || "create";
+  const title = parsedInvite?.title || cleanedSubject || "最近转发邮件";
+  const startAt = parsedInvite?.startAt || fallbackStart.toISOString();
+  const endAt =
+    parsedInvite?.endAt ||
+    (parsedInvite?.startAt ? new Date(new Date(parsedInvite.startAt).getTime() + 60 * 60 * 1000).toISOString() : fallbackEnd.toISOString());
 
   return {
-    title: cleanedSubject || "最近转发邮件",
-    decision: "create",
-    decisionLabel: "助理判断：已发现待解析邮件",
-    summary: "后端已找到一封带指定标识的邮件。下一步可继续接入正文与 .ics 深度解析，把它自动判断为新增、改期或取消。",
-    startAt: startAt.toISOString(),
-    endAt: endAt.toISOString(),
-    location: "待从邮件正文 / .ics 解析",
-    organizer: item.from || "当前邮箱",
-    meetingLink: "",
-    reminderTitle: `会前确认${cleanedSubject || "邮件会议"}资料`,
-    todoTitle: `准备${cleanedSubject || "邮件会议"}会前资料`,
+    title,
+    decision,
+    decisionLabel:
+      decision === "cancel"
+        ? "助理判断：会议取消"
+        : decision === "update"
+          ? "助理判断：会议改期 / 更新"
+          : "助理判断：新增会议",
+    summary:
+      parsedInvite?.summary ||
+      "后端已找到一封带指定标识的邮件，并完成了第一轮正文 / 日历附件解析。",
+    startAt,
+    endAt,
+    location: parsedInvite?.location || parsedInvite?.meetingLink || "待从邮件正文 / .ics 解析",
+    organizer: parsedInvite?.organizer || item.from || "当前邮箱",
+    meetingLink: parsedInvite?.meetingLink || "",
+    reminderTitle: `会前确认${title || "邮件会议"}资料`,
+    todoTitle: `准备${title || "邮件会议"}会前资料`,
     source: "mailbox-api",
   };
 }
